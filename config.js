@@ -14,7 +14,7 @@ window.QUIZ_CONFIG = {
   // - good / bad : ce que dit sa tête quand on répond juste / faux à un de ses quiz
   people: [
     {
-      name: "Lui", head: "img/lui.png", email: "admin@question-pour-une-championne.fr", id: "dd22ed40-8aea-4207-9fae-94225c83249b",
+      name: "Flav", head: "img/lui.png", email: "admin@question-pour-une-championne.fr", id: "dd22ed40-8aea-4207-9fae-94225c83249b",
       lines: [
         "Prête la peste ?",
         "Gnegnegne je suis le plus fort",
