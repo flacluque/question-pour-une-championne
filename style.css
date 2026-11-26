@@ -320,3 +320,21 @@ code { font-size: .9em; background: var(--accent-soft); padding: 1px 6px; border
 .duo .bubble { top: -26px; }
 .brand-name { text-align: left; }
 .bubble { white-space: normal; width: max-content; max-width: min(220px, 60vw); text-align: center; line-height: 1.3; }
+
+/* ---------- Fond d'écran : motif de bonhommes (img/motif-*.jpg, généré par tools/pattern.swift) ----------
+   Le motif est déjà mélangé à la couleur du fond, en clair et en sombre. Il glisse lentement en diagonale :
+   la couche déborde d'un motif en haut à gauche et se décale d'exactement un motif, donc la boucle est invisible. */
+:root { --motif: url("img/motif-clair.jpg"); --motif-w: 1552px; --motif-h: 1380px; }
+@media (prefers-color-scheme: dark) { :root { --motif: url("img/motif-sombre.jpg"); } }
+@media (max-width: 600px) { :root { --motif-w: 1086px; --motif-h: 966px; } }
+body { position: relative; isolation: isolate; }
+body::after {
+  content: ""; position: fixed; z-index: -1; pointer-events: none;
+  top: calc(-1 * var(--motif-h)); left: calc(-1 * var(--motif-w));
+  width: calc(100vw + var(--motif-w)); height: calc(100vh + var(--motif-h));
+  background: var(--bg) var(--motif) repeat 0 0 / var(--motif-w) var(--motif-h);
+  will-change: transform;
+  animation: motif-drift 140s linear infinite;
+}
+@keyframes motif-drift { to { transform: translate3d(var(--motif-w), var(--motif-h), 0); } }
+@media (prefers-reduced-motion: reduce) { body::after { animation: none; transform: translate3d(var(--motif-w), var(--motif-h), 0); } }
