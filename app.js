@@ -52,7 +52,7 @@
     quizId: null,             // quiz ouvert (partie ou gestion)
     questions: [], questionsFor: null, questionsLoading: false,
     mode: "home",             // home | intro | quiz | end | login | admin | adminQuiz
-    idx: 0, picked: null, results: [], fresh: false, picks: [], orders: null, saved: false,
+    idx: 0, picked: null, results: [], fresh: false, log: [], orders: null, saved: false, draft: null, outcome: null,
     player: storedPlayer(),
     session: null,
     loginErr: "", loginWho: 0,
@@ -60,7 +60,12 @@
     uploading: false, saving: false,
   };
 
-  function emptyForm() { return { question: "", answers: ["", "", "", ""], correct: 0, photoPath: null, photoCaption: "" }; }
+  function emptyForm(kind = "choice") {
+    return { kind, question: "", answers: ["", "", "", ""], correct: 0, tf: 0,
+      slider: { min: "0", max: "100", step: "1", unit: "", answer: "", tol: "0" },
+      order: ["", "", "", ""], accepted: "", promptPath: null, effect: "blur", focus: { x: 50, y: 45 },
+      photoPath: null, photoCaption: "" };
+  }
   const uid = () => state.session && state.session.user ? state.session.user.id : null;
   const currentQuiz = () => state.quizzes.find(q => q.id === state.quizId) || null;
   const countOf = q => (q.questions && q.questions[0] && q.questions[0].count) || 0;
@@ -114,9 +119,17 @@
   const VIDEO_EXT = ["mp4", "mov", "m4v", "webm", "ogv"];
   const MAX_VIDEO_MB = 50; // limite d'envoi par fichier de l'offre gratuite Supabase
   function isVideo(path) { return !!path && VIDEO_EXT.includes(String(path).split(".").pop().toLowerCase()); }
-  // Affiche une photo ou une vidéo selon le fichier
+  const AUDIO_EXT = ["mp3", "m4a", "aac", "wav", "ogg", "oga", "flac"];
+  function isAudio(path) { return !!path && AUDIO_EXT.includes(String(path).split(".").pop().toLowerCase()); }
+  // Affiche une photo, une vidéo ou un son selon le fichier
   function media(path, { cls = null, alt = "", play = false, preview = false } = {}) {
     const src = photoUrl(path);
+    if (isAudio(path)) {
+      if (cls) return el("div", { class: cls + " audio-thumb", "aria-label": "Son", text: "♪" });
+      const a = el("audio", { src, preload: "metadata", "aria-label": alt || "Son" });
+      a.controls = true; if (play) a.autoplay = true;
+      return a;
+    }
     if (!isVideo(path)) return el("img", { class: cls, src, alt });
     const v = el("video", { class: cls, src: src + (preview ? "#t=0.1" : ""), playsinline: true, preload: "metadata",
       "aria-label": alt || "Vidéo" });
@@ -322,14 +335,94 @@
           el("button", { type: "button", class: "ghost", onclick: goHome, text: "Autres quiz" }))));
   }
 
+  // ---------- types de questions ----------
+  const KINDS = {
+    choice:    { label: "Choix multiple",        hint: "4 réponses, une seule bonne" },
+    truefalse: { label: "Vrai ou faux",          hint: "Une affirmation, vraie ou fausse" },
+    slider:    { label: "Curseur",               hint: "Un chiffre à estimer, avec une marge" },
+    order:     { label: "Remettre dans l'ordre", hint: "3 à 8 éléments à classer" },
+    text:      { label: "Réponse libre",         hint: "On tape la réponse, petites fautes tolérées" },
+    mystery:   { label: "Photo mystère",         hint: "Photo floutée ou zoomée, dévoilée à la fin" },
+    blindtest: { label: "Blind test",            hint: "Un son ou une musique à reconnaître" },
+  };
+  const kindOf = q => (q && KINDS[q.kind] ? q.kind : "choice");
+  const isChoiceKind = k => k === "choice" || k === "mystery" || k === "blindtest";
+  const qData = q => (q && q.data && typeof q.data === "object" ? q.data : {});
+  function num(v) { const n = parseFloat(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : NaN; }
+  const numFmt = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
+  function withUnit(v, unit) { return numFmt.format(v) + (unit ? " " + unit : ""); }
+
+  // La bonne réponse, en texte (pour l'affichage et l'historique)
+  function correctText(q) {
+    const k = kindOf(q), a = q.answers || [], d = qData(q);
+    if (k === "slider") return withUnit(num(d.answer), d.unit);
+    if (k === "order") return a.join(" → ");
+    if (k === "text") return a[0] || "";
+    return a[Number(q.correct)] || "";
+  }
+
+  // Réponse libre : on ignore majuscules, accents, ponctuation, articles, et on tolère 1-2 fautes de frappe
+  function normalize(s) {
+    return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, " ").trim().replace(/^(le|la|les|l|un|une|des|du|de|d) /, "").trim();
+  }
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[n];
+  }
+  function textMatches(input, accepted) {
+    const n = normalize(input);
+    if (!n) return false;
+    return accepted.some(acc => {
+      const m = normalize(acc);
+      if (!m) return false;
+      const tol = m.length >= 9 ? 2 : m.length >= 4 ? 1 : 0;
+      return n === m || levenshtein(n, m) <= tol;
+    });
+  }
+
+  // ---------- partie ----------
   function startQuiz() {
     FX.sound.whoosh();
-    state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.picks = []; state.fresh = false;
+    state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.log = []; state.fresh = false;
     state.saved = false;
     // Ordre des réponses mélangé à chaque partie (la bonne n'est jamais au même endroit)
-    state.orders = state.questions.map(() => shuffle([0, 1, 2, 3]));
-    state.questions.forEach(q => { if (q.photo_path && !isVideo(q.photo_path)) { const i = new Image(); i.src = photoUrl(q.photo_path); } });
+    state.orders = state.questions.map(q => {
+      const k = kindOf(q);
+      if (k === "truefalse") return [0, 1];
+      return isChoiceKind(k) ? shuffle((q.answers || []).map((_, i) => i)) : null;
+    });
+    state.questions.forEach(q => [q.photo_path, q.prompt_media].forEach(p => {
+      if (p && !isVideo(p) && !isAudio(p)) { const i = new Image(); i.src = photoUrl(p); }
+    }));
+    initDraft();
     render(); scrollTop();
+  }
+
+  // Brouillon de la réponse en cours (curseur, ordre, texte)
+  function initDraft() {
+    const q = state.questions[state.idx];
+    state.outcome = null;
+    if (!q) { state.draft = null; return; }
+    const k = kindOf(q), d = qData(q);
+    if (k === "slider") {
+      const min = num(d.min), max = num(d.max), step = num(d.step) || 1;
+      state.draft = { value: Math.round(((min + max) / 2 - min) / step) * step + min };
+    } else if (k === "order") {
+      const idx = (q.answers || []).map((_, i) => i);
+      let o = shuffle(idx);
+      for (let t = 0; t < 10 && idx.length > 1 && o.every((v, i) => v === i); t++) o = shuffle(idx);
+      state.draft = { order: o };
+    } else if (k === "text") {
+      state.draft = { text: "" };
+    } else state.draft = null;
   }
 
   function renderQuiz() {
@@ -338,75 +431,227 @@
     if (!qs.length) { state.mode = "intro"; return renderIntro(); }
     if (state.idx >= qs.length) { state.mode = "end"; return renderEnd(); }
     const q = qs[state.idx];
+    const k = kindOf(q);
     const answered = state.picked != null;
-    const correct = Number(q.correct);
-    const good = answered && state.picked === correct;
-    const fresh = answered && state.fresh; // premier affichage après le clic : on joue les animations
+    const good = answered && !!(state.outcome && state.outcome.good);
+    const fresh = answered && state.fresh; // premier affichage après la réponse : on joue les animations
 
     const progress = el("div", { class: "progress", "aria-hidden": "true" },
       qs.map((_, i) => el("span", { class: i < state.results.length ? (state.results[i] ? "done-good" : "done-bad") : i === state.idx ? "current" : "" })));
-
-    const order = (state.orders && state.orders[state.idx]) || [0, 1, 2, 3];
-    const answers = el("div", { class: "answers" + (answered ? "" : " answers-in") },
-      order.map((i, pos) => {
-        const a = (q.answers || [])[i];
-        let cls = "answer";
-        if (answered) {
-          if (i === correct) cls += " is-good" + (fresh ? (good ? " pop" : " hint") : "");
-          else if (i === state.picked) cls += " is-bad" + (fresh ? " shake" : "");
-          else cls += " is-faded";
-        }
-        return el("button", { type: "button", class: cls, style: "--i:" + pos, disabled: answered, onclick: () => pick(i) },
-          el("span", { class: "letter", text: LETTERS[pos] }), el("span", { class: "txt", text: a }));
-      }));
 
     const card = el("section", { class: "card" + (fresh && !good ? " card-bad" : "") },
       progress,
       el("div", { class: "q-head" },
         hostEl(quiz, answered ? (good ? "good" : "bad") : null, fresh ? reactionLine(hostFor(quiz), good) : null),
         el("div", { class: "stack" },
-          el("span", { class: "tag", text: "Question " + (state.idx + 1) + " sur " + qs.length }),
+          el("span", { class: "tag", text: "Question " + (state.idx + 1) + " sur " + qs.length + (k !== "choice" ? " · " + KINDS[k].label : "") }),
           el("h2", { class: answered ? "" : "q-in", text: q.question }))),
-      answers);
+      renderPrompt(q, answered),
+      renderAnswerArea(q, k, answered, good, fresh));
 
-    if (answered) {
-      const reveal = el("div", { class: "reveal " + (good ? "good" : "bad") },
-        el("p", { class: "verdict", text: good ? "Bonne réponse !" : "Raté…" }));
-      if (q.photo_path) {
-        if (good) {
-          reveal.append(el("figure", { class: "photo develop" },
-            media(q.photo_path, { alt: q.photo_caption || "Photo", play: true }),
-            el("span", { class: "shine", "aria-hidden": "true" })));
-          if (q.photo_caption) reveal.append(el("p", { class: "photo-caption", text: q.photo_caption }));
-        } else {
-          reveal.append(el("figure", { class: "photo locked" },
-            media(q.photo_path, { preview: true }),
-            el("figcaption", { text: isVideo(q.photo_path) ? "Vidéo perdue" : "Photo perdue" })));
-        }
-      }
-      if (!good) reveal.append(el("p", { class: "muted", text: "La bonne réponse était « " + (q.answers || [])[correct] + " »." }));
-      const last = state.idx === qs.length - 1;
-      reveal.append(el("button", { type: "button", class: "next-btn", onclick: next, text: last ? "Voir mon score" : "Question suivante" }));
-      card.append(reveal);
-    }
+    if (answered) card.append(renderReveal(q, k, good));
     return card;
   }
 
-  function pick(i) {
+  // Média dans la question : photo mystère (floutée / zoomée) ou son du blind test
+  function renderPrompt(q, answered) {
+    const path = q.prompt_media;
+    if (!path) return null;
+    if (isAudio(path)) return renderAudioPlayer(path, answered);
+    const d = qData(q);
+    const effect = kindOf(q) === "mystery" ? (d.effect || "blur") : "none";
+    const fx = el("div", { class: "prompt-media fx-" + effect + (answered ? " revealed" : "") });
+    if (effect === "zoom") fx.style.setProperty("--focus", (d.focus_x ?? 50) + "% " + (d.focus_y ?? 45) + "%");
+    const m = media(path, { alt: answered ? "Photo de la question" : "Photo mystère", preview: !isVideo(path) });
+    if (isVideo(path)) { m.controls = true; m.loop = true; m.muted = kindOf(q) !== "blindtest"; }
+    fx.append(m);
+    if (!answered && effect !== "none") fx.append(el("span", { class: "prompt-badge", text: effect === "zoom" ? "Zoom ×3" : "Flouté" }));
+    return fx;
+  }
+
+  function renderAudioPlayer(path, answered) {
+    const audio = el("audio", { src: photoUrl(path), preload: "auto" });
+    const btn = el("button", { type: "button", class: "blind-play", "aria-label": "Écouter l'extrait" },
+      el("span", { class: "blind-icon", "aria-hidden": "true", text: "▶" }),
+      el("span", { class: "eq", "aria-hidden": "true" }, el("i"), el("i"), el("i"), el("i"), el("i")),
+      el("span", { class: "blind-label", text: "Écouter l'extrait" }));
+    const set = playing => {
+      btn.classList.toggle("playing", playing);
+      btn.querySelector(".blind-icon").textContent = playing ? "❚❚" : "▶";
+      btn.querySelector(".blind-label").textContent = playing ? "En écoute…" : (audio.currentTime > 0 ? "Réécouter" : "Écouter l'extrait");
+    };
+    btn.addEventListener("click", () => { if (audio.paused) { audio.play().catch(() => toast("Impossible de lire ce son sur cet appareil.")); } else audio.pause(); });
+    audio.addEventListener("play", () => set(true));
+    audio.addEventListener("pause", () => set(false));
+    audio.addEventListener("ended", () => { audio.currentTime = 0; set(false); });
+    return el("div", { class: "blind" + (answered ? " done" : "") }, btn, audio);
+  }
+
+  function renderAnswerArea(q, k, answered, good, fresh) {
+    if (isChoiceKind(k) || k === "truefalse") {
+      const order = (state.orders && state.orders[state.idx]) || (q.answers || []).map((_, i) => i);
+      const correct = Number(q.correct);
+      const picked = state.outcome ? state.outcome.pickedIdx : null;
+      return el("div", { class: "answers" + (k === "truefalse" ? " answers-tf" : "") + (answered ? "" : " answers-in") },
+        order.map((i, pos) => {
+          let cls = "answer";
+          if (answered) {
+            if (i === correct) cls += " is-good" + (fresh ? (good ? " pop" : " hint") : "");
+            else if (i === picked) cls += " is-bad" + (fresh ? " shake" : "");
+            else cls += " is-faded";
+          }
+          const label = (q.answers || [])[i];
+          return el("button", { type: "button", class: cls, style: "--i:" + pos, disabled: answered, onclick: () => answerChoice(i) },
+            el("span", { class: "letter", text: k === "truefalse" ? (i === 0 ? "V" : "F") : LETTERS[pos] }), el("span", { class: "txt", text: label }));
+        }));
+    }
+    if (k === "slider") return renderSlider(q, answered, good, fresh);
+    if (k === "order") return renderOrder(q, answered, good, fresh);
+    if (k === "text") return renderTextAnswer(q, answered, good, fresh);
+    return null;
+  }
+
+  function renderSlider(q, answered, good, fresh) {
+    const d = qData(q);
+    const min = num(d.min), max = num(d.max), step = num(d.step) || 1, ans = num(d.answer), tol = Math.max(0, num(d.tol) || 0);
+    const value = answered ? state.outcome.value : state.draft.value;
+    const out = el("output", { class: "slider-value" + (answered ? (good ? " is-good" : " is-bad") : ""), for: "slider", text: withUnit(value, d.unit) });
+    const range = el("input", { type: "range", id: "slider", min: String(min), max: String(max), step: String(step), value: String(value), disabled: answered,
+      "aria-label": "Ta réponse",
+      oninput: e => { state.draft.value = Number(e.target.value); out.textContent = withUnit(state.draft.value, d.unit); } });
+    const pct = v => Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100));
+    const track = el("div", { class: "slider-track" }, range);
+    if (answered) {
+      // Zone acceptée et bonne réponse sur la piste
+      const zone = el("span", { class: "slider-zone", "aria-hidden": "true" });
+      zone.style.left = pct(ans - tol) + "%"; zone.style.width = Math.max(1.2, pct(ans + tol) - pct(ans - tol)) + "%";
+      const mark = el("span", { class: "slider-mark", "aria-hidden": "true" }, el("b", { text: withUnit(ans, d.unit) }));
+      mark.style.left = pct(ans) + "%";
+      track.append(zone, mark);
+    }
+    return el("div", { class: "slider-box" + (fresh ? (good ? " pop" : " shake") : "") },
+      out,
+      track,
+      el("div", { class: "slider-ends", "aria-hidden": "true" }, el("span", { text: withUnit(min, d.unit) }), el("span", { text: withUnit(max, d.unit) })),
+      answered ? null : el("div", { class: "row" }, el("button", { type: "button", class: "validate", onclick: answerSlider, text: "Valider" })));
+  }
+
+  function renderOrder(q, answered, good, fresh) {
+    const items = q.answers || [];
+    const order = answered ? state.outcome.order : state.draft.order;
+    const move = (pos, dir) => {
+      const o = state.draft.order, j = pos + dir;
+      if (j < 0 || j >= o.length) return;
+      [o[pos], o[j]] = [o[j], o[pos]];
+      FX.sound.tick();
+      render();
+      view.querySelectorAll(".order-item")[j]?.classList.add("moved");
+      view.querySelectorAll(".order-item")[j]?.querySelector(dir < 0 ? ".up" : ".down")?.focus();
+    };
+    return el("div", { class: "order-box" + (fresh && !good ? " shake" : "") },
+      answered ? null : el("p", { class: "hint", text: "Classe du premier au dernier avec les flèches." }),
+      el("ol", { class: "order-list" }, order.map((i, pos) => {
+        const ok = answered && i === pos;
+        return el("li", { class: "order-item" + (answered ? (ok ? " is-good" : " is-bad") : ""), style: "--i:" + pos },
+          el("span", { class: "order-rank", text: String(pos + 1) }),
+          el("span", { class: "txt", text: items[i] }),
+          answered ? el("span", { class: "order-mark", "aria-label": ok ? "Bien placé" : "Mal placé", text: ok ? "✓" : "✗" })
+            : el("span", { class: "order-acts" },
+                el("button", { type: "button", class: "iconbtn up", "aria-label": "Monter « " + items[i] + " »", disabled: pos === 0, onclick: () => move(pos, -1), text: "↑" }),
+                el("button", { type: "button", class: "iconbtn down", "aria-label": "Descendre « " + items[i] + " »", disabled: pos === order.length - 1, onclick: () => move(pos, 1), text: "↓" })));
+      })),
+      answered ? null : el("div", { class: "row" }, el("button", { type: "button", class: "validate", onclick: answerOrder, text: "Valider l'ordre" })));
+  }
+
+  function renderTextAnswer(q, answered, good, fresh) {
+    const input = el("input", { type: "text", id: "free-answer", autocomplete: "off", autocapitalize: "off", spellcheck: "false", maxlength: "120",
+      placeholder: "Ta réponse…", value: answered ? state.outcome.text : state.draft.text, disabled: answered,
+      class: answered ? (good ? "is-good" : "is-bad") : "",
+      oninput: e => (state.draft.text = e.target.value) });
+    if (!answered) setTimeout(() => { if (input.isConnected && !("ontouchstart" in window)) input.focus(); }, 50);
+    return el("form", { class: "text-answer" + (fresh ? (good ? " pop" : " shake") : ""), onsubmit: e => { e.preventDefault(); answerText(); } },
+      input,
+      answered ? null : el("button", { type: "submit", class: "validate", text: "Valider" }));
+  }
+
+  function renderReveal(q, k, good) {
+    const o = state.outcome;
+    const d = qData(q);
+    const reveal = el("div", { class: "reveal " + (good ? "good" : "bad") },
+      el("p", { class: "verdict", text: good ? (k === "slider" && o.value !== num(d.answer) ? "Bien vu !" : "Bonne réponse !") : "Raté…" }));
+    if (q.photo_path) {
+      if (good) {
+        reveal.append(el("figure", { class: "photo develop" },
+          media(q.photo_path, { alt: q.photo_caption || "Photo", play: true }),
+          el("span", { class: "shine", "aria-hidden": "true" })));
+        if (q.photo_caption) reveal.append(el("p", { class: "photo-caption", text: q.photo_caption }));
+      } else {
+        reveal.append(el("figure", { class: "photo locked" },
+          media(q.photo_path, { preview: true }),
+          el("figcaption", { text: isVideo(q.photo_path) ? "Vidéo perdue" : isAudio(q.photo_path) ? "Son perdu" : "Photo perdue" })));
+      }
+    }
+    if (k === "slider") {
+      const tol = num(d.tol) || 0;
+      reveal.append(el("p", { class: "muted", text: "Tu as dit " + withUnit(o.value, d.unit) + ", la réponse était " + withUnit(num(d.answer), d.unit)
+        + (tol ? " (accepté à ±" + withUnit(tol, d.unit) + ")." : ".") }));
+    } else if (k === "order" && !good) {
+      reveal.append(el("div", { class: "stack", style: "align-items:center" },
+        el("p", { class: "muted", text: "Le bon ordre :" }),
+        el("ol", { class: "good-order" }, (q.answers || []).map(a => el("li", { text: a })))));
+    } else if (k === "text") {
+      if (!good) reveal.append(el("p", { class: "muted", text: "Tu as écrit « " + (o.text || "") + " ». La réponse attendue : « " + correctText(q) + " »." }));
+      else if (normalize(o.text) !== normalize(correctText(q))) reveal.append(el("p", { class: "muted", text: "La réponse exacte : « " + correctText(q) + " »." }));
+    } else if (!good) {
+      reveal.append(el("p", { class: "muted", text: "La bonne réponse était « " + correctText(q) + " »." }));
+    }
+    const last = state.idx === state.questions.length - 1;
+    reveal.append(el("button", { type: "button", class: "next-btn", onclick: next, text: last ? "Voir mon score" : "Question suivante" }));
+    return reveal;
+  }
+
+  // ---------- réponses ----------
+  function answerChoice(i) {
+    const q = state.questions[state.idx];
+    finish(i === Number(q.correct), (q.answers || [])[i], { pickedIdx: i });
+  }
+  function answerSlider() {
+    const q = state.questions[state.idx], d = qData(q);
+    const v = state.draft.value;
+    finish(Math.abs(v - num(d.answer)) <= (num(d.tol) || 0) + 1e-9, withUnit(v, d.unit), { value: v });
+  }
+  function answerOrder() {
+    const q = state.questions[state.idx];
+    const o = state.draft.order.slice();
+    finish(o.every((v, i) => v === i), o.map(i => (q.answers || [])[i]).join(" → "), { order: o });
+  }
+  function answerText() {
+    const q = state.questions[state.idx];
+    const t = (state.draft.text || "").trim();
+    if (!t) { toast("Écris une réponse avant de valider."); return; }
+    finish(textMatches(t, q.answers || []), t, { text: t });
+  }
+
+  function finish(good, pickedText, extra = {}) {
     if (state.picked != null) return;
-    const good = i === Number(state.questions[state.idx].correct);
-    state.picked = i; state.fresh = true;
+    const q = state.questions[state.idx];
+    state.picked = true; state.fresh = true;
+    state.outcome = { good, ...extra };
     state.results.push(good);
-    (state.picks = state.picks || []).push(i);
+    (state.log = state.log || []).push({ q: q.question, picked: pickedText, correct: correctText(q), good });
     render();
     state.fresh = false;
+    const prompt = view.querySelector(".blind audio");
+    if (prompt && !prompt.paused) prompt.pause();
     if (good) {
       FX.sound.correct();
-      FX.confettiFrom(view.querySelector(".answer.is-good"), { count: 60 });
+      FX.confettiFrom(view.querySelector(".answer.is-good, .slider-value, .order-list, .text-answer"), { count: 60 });
       const photo = view.querySelector(".photo.develop");
       // Lance la vidéo avec le son (le clic sur la réponse l'autorise) ; sinon en muet
       const vid = photo && photo.querySelector("video");
       if (vid) { vid.muted = false; vid.play().catch(() => { vid.muted = true; vid.play().catch(() => {}); }); }
+      const aud = photo && photo.querySelector("audio");
+      if (aud) aud.play().catch(() => {});
       if (photo) setTimeout(() => { if (photo.isConnected) FX.confettiFrom(photo, { count: 90, spread: 1.4, power: 1.2 }); }, 450);
     } else {
       FX.sound.wrong();
@@ -415,23 +660,32 @@
     const r = view.querySelector(".reveal");
     if (r) setTimeout(() => r.scrollIntoView({ behavior: FX.reduceMotion() ? "auto" : "smooth", block: "nearest" }), 250);
   }
+
   function next() {
     FX.sound.tick();
+    view.querySelectorAll("audio, video").forEach(m => { try { m.pause(); } catch {} });
     state.idx++; state.picked = null;
     if (state.idx >= state.questions.length) { state.mode = "end"; state.fresh = true; }
+    else initDraft();
     render(); scrollTop();
     if (state.mode === "end") { celebrate(); saveResult(); }
   }
 
-  // Raccourcis clavier : A-D ou 1-4 pour répondre, Entrée pour continuer
+  // Raccourcis clavier : A-D (ou 1-4) pour les choix, V / F pour vrai ou faux, Entrée pour continuer
   window.addEventListener("keydown", e => {
     if (state.mode !== "quiz" || e.metaKey || e.ctrlKey || e.altKey) return;
     if (/^(INPUT|TEXTAREA)$/.test((e.target && e.target.tagName) || "")) return;
-    const k = e.key.toLowerCase();
-    const idx = "abcd".indexOf(k) >= 0 ? "abcd".indexOf(k) : "1234".indexOf(k);
-    const order = (state.orders && state.orders[state.idx]) || [0, 1, 2, 3];
-    if (state.picked == null && idx >= 0) { e.preventDefault(); pick(order[idx]); }
-    else if (state.picked != null && e.key === "Enter" && !(e.target && e.target.tagName === "BUTTON")) { e.preventDefault(); next(); }
+    const q = state.questions[state.idx];
+    const k = kindOf(q);
+    const key = e.key.toLowerCase();
+    if (state.picked == null) {
+      if (k === "truefalse" && (key === "v" || key === "f")) { e.preventDefault(); answerChoice(key === "v" ? 0 : 1); return; }
+      if (isChoiceKind(k)) {
+        const idx = "abcd".indexOf(key) >= 0 ? "abcd".indexOf(key) : "1234".indexOf(key);
+        const order = (state.orders && state.orders[state.idx]) || [0, 1, 2, 3];
+        if (idx >= 0 && idx < order.length) { e.preventDefault(); answerChoice(order[idx]); }
+      }
+    } else if (e.key === "Enter" && !(e.target && e.target.tagName === "BUTTON")) { e.preventDefault(); next(); }
   });
 
   // Enregistre la partie terminée (lisible ensuite par l'auteur du quiz dans l'admin)
@@ -439,14 +693,9 @@
     if (!sb || state.saved || !state.quizId) return;
     state.saved = true;
     const qs = state.questions;
-    const answers = qs.map((q, k) => {
-      const picked = (state.picks || [])[k];
-      return { q: q.question, picked: picked != null ? (q.answers || [])[picked] : null,
-               correct: (q.answers || [])[Number(q.correct)], good: !!state.results[k] };
-    });
     const player = (state.player || "").trim().slice(0, 40) || null;
     const { error } = await sb.from("results").insert({
-      quiz_id: state.quizId, player, score: state.results.filter(Boolean).length, total: qs.length, answers,
+      quiz_id: state.quizId, player, score: state.results.filter(Boolean).length, total: qs.length, answers: state.log || [],
     });
     if (error) console.warn("Résultat non enregistré :", error.message);
   }
@@ -629,10 +878,11 @@
     else if (!state.questions.length) list.append(el("p", { class: "muted", text: "Aucune question pour l'instant. Ajoute la première avec le formulaire ci-dessus." }));
     else {
       list.append(el("div", { class: "qlist" }, state.questions.map((q, i) => el("div", { class: "qitem" },
-        q.photo_path ? media(q.photo_path, { cls: "thumb", preview: true }) : el("div", { class: "thumb", text: "sans photo" }),
+        (q.photo_path || q.prompt_media) ? media(q.photo_path || q.prompt_media, { cls: "thumb", preview: true }) : el("div", { class: "thumb", text: "sans photo" }),
         el("div", { class: "meta" },
+          el("span", { class: "kind-tag", text: KINDS[kindOf(q)].label }),
           el("p", { class: "q", text: (i + 1) + ". " + q.question }),
-          el("p", { class: "a", text: "✓ " + ((q.answers || [])[Number(q.correct)] || "") })),
+          el("p", { class: "a", text: "✓ " + correctText(q) + (kindOf(q) === "slider" && num(qData(q).tol) ? " (±" + withUnit(num(qData(q).tol), qData(q).unit) + ")" : "") })),
         el("div", { class: "acts" },
           el("button", { type: "button", class: "iconbtn", "aria-label": "Monter", disabled: i === 0, onclick: () => move(i, -1), text: "↑" }),
           el("button", { type: "button", class: "iconbtn", "aria-label": "Descendre", disabled: i === state.questions.length - 1, onclick: () => move(i, 1), text: "↓" }),
@@ -746,7 +996,7 @@
       return;
     }
     btn.disabled = true;
-    const photos = state.questionsFor === quiz.id ? state.questions.map(q => q.photo_path).filter(Boolean) : [];
+    const photos = state.questionsFor === quiz.id ? state.questions.flatMap(q => [q.photo_path, q.prompt_media]).filter(Boolean) : [];
     const { error } = await sb.from("quizzes").delete().eq("id", quiz.id);
     if (error) { btn.disabled = false; toast(authHint(error) || "Le quiz n'a pas pu être supprimé."); return; }
     if (photos.length) await sb.storage.from(BUCKET).remove(photos);
@@ -756,37 +1006,88 @@
   }
 
   function startEdit(q) {
+    const k = kindOf(q), d = qData(q), a = q.answers || [];
+    const f = emptyForm(k);
+    Object.assign(f, { question: q.question, photoPath: q.photo_path, photoCaption: q.photo_caption || "", promptPath: q.prompt_media || null });
+    if (isChoiceKind(k)) { f.answers = [0, 1, 2, 3].map(i => a[i] || ""); f.correct = Number(q.correct) || 0; }
+    if (k === "truefalse") f.tf = Number(q.correct) === 1 ? 1 : 0;
+    if (k === "slider") f.slider = { min: String(d.min ?? 0), max: String(d.max ?? 100), step: String(d.step ?? 1), unit: d.unit || "", answer: String(d.answer ?? ""), tol: String(d.tol ?? 0) };
+    if (k === "order") f.order = a.slice();
+    if (k === "text") f.accepted = a.join("\n");
+    if (k === "mystery") { f.effect = d.effect || "blur"; f.focus = { x: d.focus_x ?? 50, y: d.focus_y ?? 45 }; }
     state.editingId = q.id;
-    state.form = { question: q.question, answers: [...q.answers], correct: Number(q.correct), photoPath: q.photo_path, photoCaption: q.photo_caption || "" };
+    state.form = f;
     render();
     document.getElementById("f-question")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
-  function cancelEdit() { state.editingId = null; state.form = emptyForm(); render(); }
+  function cancelEdit() { state.editingId = null; state.form = emptyForm(state.form.kind); render(); }
+
+  // Construit la ligne à enregistrer, ou renvoie un message d'erreur
+  function buildRow(f) {
+    const k = f.kind;
+    const question = f.question.trim();
+    if (!question) return { error: "Écris la question." };
+    const row = { kind: k, question, correct: 0, data: {}, prompt_media: null,
+      photo_path: f.photoPath || null, photo_caption: f.photoPath && f.photoCaption.trim() ? f.photoCaption.trim() : null };
+    if (isChoiceKind(k)) {
+      const answers = f.answers.map(a => a.trim());
+      if (answers.some(a => !a)) return { error: "Remplis les quatre réponses." };
+      row.answers = answers; row.correct = f.correct;
+    }
+    if (k === "truefalse") { row.answers = ["Vrai", "Faux"]; row.correct = f.tf; }
+    if (k === "slider") {
+      const s = f.slider, min = num(s.min), max = num(s.max), step = num(s.step), ans = num(s.answer), tol = s.tol === "" ? 0 : num(s.tol);
+      if ([min, max, step, ans, tol].some(Number.isNaN)) return { error: "Remplis tous les nombres du curseur." };
+      if (min >= max) return { error: "Le minimum doit être plus petit que le maximum." };
+      if (step <= 0 || step > max - min) return { error: "Le pas doit être positif et plus petit que l'écart min-max." };
+      if (ans < min || ans > max) return { error: "La bonne réponse doit être entre le minimum et le maximum." };
+      if (tol < 0) return { error: "La marge ne peut pas être négative." };
+      row.answers = [String(ans)];
+      row.data = { min, max, step, answer: ans, tol, unit: s.unit.trim().slice(0, 12) };
+    }
+    if (k === "order") {
+      const items = f.order.map(a => a.trim()).filter(Boolean);
+      if (items.length < 3) return { error: "Mets au moins 3 éléments à classer." };
+      if (new Set(items.map(normalize)).size !== items.length) return { error: "Deux éléments sont identiques : rends-les différents." };
+      row.answers = items;
+    }
+    if (k === "text") {
+      const acc = f.accepted.split("\n").map(a => a.trim()).filter(Boolean).slice(0, 12);
+      if (!acc.length) return { error: "Écris au moins une réponse acceptée." };
+      row.answers = acc;
+    }
+    if (k === "mystery") {
+      if (!f.promptPath || isAudio(f.promptPath)) return { error: "Ajoute la photo (ou vidéo) mystère." };
+      row.prompt_media = f.promptPath;
+      row.data = { effect: f.effect, focus_x: Math.round(f.focus.x), focus_y: Math.round(f.focus.y) };
+    }
+    if (k === "blindtest") {
+      if (!f.promptPath || !(isAudio(f.promptPath) || isVideo(f.promptPath))) return { error: "Ajoute le son (ou la vidéo) à reconnaître." };
+      row.prompt_media = f.promptPath;
+    }
+    return { row };
+  }
 
   function renderForm() {
     const f = state.form;
+    const k = f.kind;
     const editing = !!state.editingId;
 
-    const qInput = el("textarea", { id: "f-question", placeholder: "Ex : Quel est mon plat préféré ?", value: f.question, oninput: e => (f.question = e.target.value) });
-    const rows = [0, 1, 2, 3].flatMap(i => [
-      el("input", { type: "radio", name: "f-correct", id: "f-correct-" + i, "aria-label": "La réponse " + LETTERS[i] + " est la bonne", checked: f.correct === i, onchange: () => (f.correct = i) }),
-      el("input", { type: "text", id: "f-ans-" + i, placeholder: "Réponse " + LETTERS[i], value: f.answers[i], oninput: e => (f.answers[i] = e.target.value) }),
-    ]);
-
-    const fileInput = el("input", { type: "file", id: "f-photo", accept: "image/*,video/*", hidden: true, onchange: e => uploadPhoto(e.target.files[0]) });
-    const preview = photoUrl(f.photoPath);
-
+    const qInput = el("textarea", { id: "f-question", placeholder: questionPlaceholder(k), value: f.question, oninput: e => (f.question = e.target.value) });
     const err = el("p", { class: "notice err", hidden: true });
     const saveBtn = el("button", { type: "submit", disabled: state.saving || state.uploading, text: editing ? "Enregistrer les modifications" : "Ajouter la question" });
 
+    const kinds = el("div", { class: "kind-chips", role: "radiogroup", "aria-label": "Type de question" },
+      Object.entries(KINDS).map(([key, info]) => el("label", { class: "kind-chip" + (k === key ? " on" : "") },
+        el("input", { type: "radio", name: "f-kind", id: "f-kind-" + key, checked: k === key, onchange: () => { f.kind = key; render(); } }),
+        el("span", { class: "kind-name", text: info.label }),
+        el("span", { class: "kind-hint", text: info.hint }))));
+
     return el("form", { class: "card", onsubmit: async e => {
       e.preventDefault();
-      const question = f.question.trim();
-      const answers = f.answers.map(a => a.trim());
-      if (!question) return showErr("Écris la question.");
-      if (answers.some(a => !a)) return showErr("Remplis les quatre réponses.");
+      const { row, error: msg } = buildRow(f);
+      if (msg) return showErr(msg);
       state.saving = true; saveBtn.disabled = true;
-      const row = { question, answers, correct: f.correct, photo_path: f.photoPath || null, photo_caption: f.photoPath && f.photoCaption.trim() ? f.photoCaption.trim() : null };
       let error;
       if (editing) {
         ({ error } = await sb.from("questions").update(row).eq("id", state.editingId));
@@ -795,56 +1096,175 @@
         ({ error } = await sb.from("questions").insert({ ...row, quiz_id: state.quizId, position: maxPos + 1 }));
       }
       state.saving = false;
-      if (error) { saveBtn.disabled = false; return showErr(authHint(error) || "L'enregistrement a échoué. Réessaie dans un instant."); }
+      if (error) {
+        saveBtn.disabled = false;
+        const schema = /kind|prompt_media|data|column|constraint|check/i.test(String(error.message || ""));
+        return showErr(authHint(error) || (schema ? "La base n'est pas à jour : relance supabase/schema.sql dans Supabase." : "L'enregistrement a échoué. Réessaie dans un instant."));
+      }
       toast(editing ? "Question modifiée" : "Question ajoutée");
-      state.editingId = null; state.form = emptyForm();
+      state.editingId = null; state.form = emptyForm(k);
       await refreshAll();
       function showErr(m) { err.textContent = m; err.hidden = false; }
     } },
       el("h3", { text: editing ? "Modifier la question" : "Nouvelle question" }),
-      el("label", { for: "f-question" }, "Question", qInput),
-      el("div", { class: "stack" },
-        el("span", { class: "label" }, "Réponses ", el("span", { class: "hint", text: "(coche la bonne)" })),
-        el("div", { class: "ans-edit" }, rows)),
-      el("div", { class: "stack" },
-        el("span", { class: "label" }, "Photo ou vidéo affichée si c'est juste ", el("span", { class: "hint", text: "(vidéo : " + MAX_VIDEO_MB + " Mo max, de préférence en .mp4)" })),
-        el("div", { class: "photo-pick" },
-          preview ? media(f.photoPath, { alt: "Aperçu", preview: true }) : null,
-          el("button", { type: "button", class: "ghost small", disabled: state.uploading, onclick: () => fileInput.click(),
-            text: state.uploading ? "Envoi…" : f.photoPath ? "Changer" : "Choisir une photo ou une vidéo" }),
-          fileInput,
-          f.photoPath ? el("button", { type: "button", class: "link", onclick: () => { f.photoPath = null; render(); }, text: "Retirer" }) : null),
-        f.photoPath ? el("label", { for: "f-caption" }, "Description ", el("span", { class: "hint", text: "(facultatif)" }),
-          el("textarea", { id: "f-caption", class: "caption-input", maxlength: "300", placeholder: "Ex : Notre premier week-end à la montagne, juillet 2024",
-            value: f.photoCaption, oninput: e => (f.photoCaption = e.target.value) })) : null),
+      el("div", { class: "stack" }, el("span", { class: "label", text: "Type de question" }), kinds),
+      el("label", { for: "f-question" }, k === "truefalse" ? "Affirmation" : "Question", qInput),
+      renderPromptField(f),
+      renderAnswerFields(f),
+      renderRewardField(f),
       err,
       el("div", { class: "row" },
         saveBtn,
         editing ? el("button", { type: "button", class: "ghost", onclick: cancelEdit, text: "Annuler" }) : null));
   }
 
-  async function uploadPhoto(file) {
+  function questionPlaceholder(k) {
+    return {
+      choice: "Ex : Quel est mon plat préféré ?",
+      truefalse: "Ex : J'ai déjà sauté en parachute.",
+      slider: "Ex : Combien de cafés je bois par semaine ?",
+      order: "Ex : Remets nos voyages dans l'ordre, du plus ancien au plus récent.",
+      text: "Ex : Comment s'appelait mon premier chat ?",
+      mystery: "Ex : C'était où ?",
+      blindtest: "Ex : C'est quelle chanson ?",
+    }[k];
+  }
+
+  function renderAnswerFields(f) {
+    const k = f.kind;
+    if (isChoiceKind(k)) {
+      const rows = [0, 1, 2, 3].flatMap(i => [
+        el("input", { type: "radio", name: "f-correct", id: "f-correct-" + i, "aria-label": "La réponse " + LETTERS[i] + " est la bonne", checked: f.correct === i, onchange: () => (f.correct = i) }),
+        el("input", { type: "text", id: "f-ans-" + i, placeholder: "Réponse " + LETTERS[i], value: f.answers[i], oninput: e => (f.answers[i] = e.target.value) }),
+      ]);
+      return el("div", { class: "stack" },
+        el("span", { class: "label" }, "Réponses ", el("span", { class: "hint", text: "(coche la bonne, elles seront mélangées)" })),
+        el("div", { class: "ans-edit" }, rows));
+    }
+    if (k === "truefalse") {
+      return el("div", { class: "stack" },
+        el("span", { class: "label", text: "Cette affirmation est…" }),
+        el("div", { class: "who" }, ["Vraie", "Fausse"].map((t, i) =>
+          el("label", {}, el("input", { type: "radio", name: "f-tf", id: "f-tf-" + i, checked: f.tf === i, onchange: () => (f.tf = i) }), t))));
+    }
+    if (k === "slider") {
+      const s = f.slider;
+      const field = (key, label, attrs = {}) => el("label", { for: "f-sl-" + key }, label,
+        el("input", { type: "text", id: "f-sl-" + key, inputmode: key === "unit" ? "text" : "decimal", value: s[key], ...attrs, oninput: e => (s[key] = e.target.value) }));
+      return el("div", { class: "stack" },
+        el("span", { class: "label" }, "Réglages du curseur ", el("span", { class: "hint", text: "(la réponse est juste si elle tombe dans la marge)" })),
+        el("div", { class: "slider-grid" },
+          field("answer", "Bonne réponse", { placeholder: "Ex : 14" }),
+          field("tol", "Marge ±", { placeholder: "Ex : 2" }),
+          field("unit", "Unité", { placeholder: "Ex : cafés, cm, €", maxlength: "12" }),
+          field("min", "Minimum"),
+          field("max", "Maximum"),
+          field("step", "Pas")));
+    }
+    if (k === "order") {
+      const list = el("ol", { class: "order-edit" }, f.order.map((v, i) => el("li", {},
+        el("input", { type: "text", id: "f-ord-" + i, placeholder: "Élément " + (i + 1), value: v, maxlength: "80", oninput: e => (f.order[i] = e.target.value) }),
+        f.order.length > 3 ? el("button", { type: "button", class: "iconbtn", "aria-label": "Retirer l'élément " + (i + 1), onclick: () => { f.order.splice(i, 1); render(); }, text: "✕" }) : null)));
+      return el("div", { class: "stack" },
+        el("span", { class: "label" }, "Éléments dans le bon ordre ", el("span", { class: "hint", text: "(du premier au dernier, ils seront mélangés)" })),
+        list,
+        f.order.length < 8 ? el("div", {}, el("button", { type: "button", class: "ghost small", onclick: () => { f.order.push(""); render(); document.getElementById("f-ord-" + (f.order.length - 1))?.focus(); }, text: "+ Ajouter un élément" })) : null);
+    }
+    if (k === "text") {
+      return el("label", { for: "f-accepted" }, "Réponses acceptées ",
+        el("span", { class: "hint", text: "(une par ligne : majuscules, accents et petites fautes de frappe sont tolérés)" }),
+        el("textarea", { id: "f-accepted", value: f.accepted, placeholder: "Ex :\nMinou\nLe minou", oninput: e => (f.accepted = e.target.value) }));
+    }
+    return null;
+  }
+
+  // Média dans la question (photo mystère, blind test)
+  function renderPromptField(f) {
+    const k = f.kind;
+    if (k !== "mystery" && k !== "blindtest") return null;
+    const mystery = k === "mystery";
+    const fileInput = el("input", { type: "file", id: "f-prompt", hidden: true, accept: mystery ? "image/*,video/*" : "audio/*,video/*",
+      onchange: e => uploadMedia(e.target.files[0], "promptPath") });
+    const valid = f.promptPath && (mystery ? !isAudio(f.promptPath) : (isAudio(f.promptPath) || isVideo(f.promptPath)));
+    const box = el("div", { class: "stack" },
+      el("span", { class: "label" }, mystery ? "Photo mystère " : "Son à reconnaître ",
+        el("span", { class: "hint", text: mystery ? "(affichée dans la question, dévoilée après la réponse)" : "(mp3, m4a, wav… ou une vidéo, " + MAX_VIDEO_MB + " Mo max)" })),
+      el("div", { class: "photo-pick" },
+        valid && !mystery ? media(f.promptPath, { alt: "Aperçu du son" }) : null,
+        el("button", { type: "button", class: "ghost small", disabled: state.uploading, onclick: () => fileInput.click(),
+          text: state.uploading ? "Envoi…" : valid ? "Changer" : mystery ? "Choisir la photo mystère" : "Choisir le son" }),
+        fileInput,
+        valid ? el("button", { type: "button", class: "link", onclick: () => { f.promptPath = null; render(); }, text: "Retirer" }) : null));
+    if (mystery) {
+      box.append(el("div", { class: "who" }, [["blur", "Floutée"], ["zoom", "Zoomée ×3"]].map(([v, t]) =>
+        el("label", {}, el("input", { type: "radio", name: "f-effect", id: "f-effect-" + v, checked: f.effect === v, onchange: () => { f.effect = v; render(); } }), t))));
+      if (valid) {
+        // Aperçu de ce que verra le joueur ; en mode zoom, un clic choisit le point zoomé
+        const fx = el("div", { class: "prompt-media admin-preview fx-" + f.effect });
+        fx.style.setProperty("--focus", f.focus.x + "% " + f.focus.y + "%");
+        fx.append(media(f.promptPath, { alt: "Aperçu de la photo mystère", preview: true }));
+        if (f.effect === "zoom") {
+          const full = el("div", { class: "focus-picker", title: "Clique sur le détail à zoomer" }, media(f.promptPath, { alt: "", preview: true }));
+          const dot = el("span", { class: "focus-dot" }); dot.style.left = f.focus.x + "%"; dot.style.top = f.focus.y + "%";
+          full.append(dot);
+          full.addEventListener("click", e => {
+            const r = full.getBoundingClientRect();
+            f.focus = { x: Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)), y: Math.min(100, Math.max(0, ((e.clientY - r.top) / r.height) * 100)) };
+            render();
+          });
+          box.append(el("div", { class: "mystery-admin" },
+            el("div", { class: "stack" }, el("span", { class: "hint", text: "Clique sur le détail à zoomer" }), full),
+            el("div", { class: "stack" }, el("span", { class: "hint", text: "Ce que verra le joueur" }), fx)));
+        } else {
+          box.append(el("div", { class: "mystery-admin" }, el("div", { class: "stack" }, el("span", { class: "hint", text: "Ce que verra le joueur" }), fx)));
+        }
+      }
+    }
+    return box;
+  }
+
+  // Récompense affichée quand la réponse est juste
+  function renderRewardField(f) {
+    const fileInput = el("input", { type: "file", id: "f-photo", accept: "image/*,video/*", hidden: true, onchange: e => uploadMedia(e.target.files[0], "photoPath") });
+    return el("div", { class: "stack" },
+      el("span", { class: "label" }, "Photo ou vidéo affichée si c'est juste ", el("span", { class: "hint", text: "(vidéo : " + MAX_VIDEO_MB + " Mo max, de préférence en .mp4)" })),
+      el("div", { class: "photo-pick" },
+        f.photoPath ? media(f.photoPath, { alt: "Aperçu", preview: true }) : null,
+        el("button", { type: "button", class: "ghost small", disabled: state.uploading, onclick: () => fileInput.click(),
+          text: state.uploading ? "Envoi…" : f.photoPath ? "Changer" : "Choisir une photo ou une vidéo" }),
+        fileInput,
+        f.photoPath ? el("button", { type: "button", class: "link", onclick: () => { f.photoPath = null; render(); }, text: "Retirer" }) : null),
+      f.photoPath ? el("label", { for: "f-caption" }, "Description ", el("span", { class: "hint", text: "(facultatif)" }),
+        el("textarea", { id: "f-caption", class: "caption-input", maxlength: "300", placeholder: "Ex : Notre premier week-end à la montagne, juillet 2024",
+          value: f.photoCaption, oninput: e => (f.photoCaption = e.target.value) })) : null);
+  }
+
+  async function uploadMedia(file, field) {
     if (!file) return;
     const fileExt = (file.name.split(".").pop() || "").toLowerCase();
     const video = (file.type || "").startsWith("video/") || VIDEO_EXT.includes(fileExt);
-    if (video && file.size > MAX_VIDEO_MB * 1024 * 1024) {
-      toast("Vidéo trop lourde (" + Math.round(file.size / 1048576) + " Mo). Maximum " + MAX_VIDEO_MB + " Mo : raccourcis-la ou exporte-la en plus petit.");
+    const audio = !video && ((file.type || "").startsWith("audio/") || AUDIO_EXT.includes(fileExt));
+    if ((video || audio) && file.size > MAX_VIDEO_MB * 1024 * 1024) {
+      toast("Fichier trop lourd (" + Math.round(file.size / 1048576) + " Mo). Maximum " + MAX_VIDEO_MB + " Mo : raccourcis-le ou exporte-le en plus petit.");
       return;
     }
     state.uploading = true; render();
-    const blob = video ? file : await shrinkImage(file);
-    const ext = video ? (VIDEO_EXT.includes(fileExt) ? fileExt : "mp4") : blob.type === "image/jpeg" ? "jpg" : (fileExt || "jpg");
+    const blob = video || audio ? file : await shrinkImage(file);
+    const ext = video ? (VIDEO_EXT.includes(fileExt) ? fileExt : "mp4")
+      : audio ? (AUDIO_EXT.includes(fileExt) ? fileExt : "mp3")
+      : blob.type === "image/jpeg" ? "jpg" : (fileExt || "jpg");
     const path = crypto.randomUUID() + "." + ext;
-    const contentType = blob.type || file.type || (video ? (ext === "mov" ? "video/quicktime" : "video/" + ext) : "image/jpeg");
+    const contentType = blob.type || file.type
+      || (video ? (ext === "mov" ? "video/quicktime" : "video/" + ext) : audio ? (ext === "mp3" ? "audio/mpeg" : ext === "m4a" ? "audio/mp4" : "audio/" + ext) : "image/jpeg");
     const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType, upsert: false });
     state.uploading = false;
     if (error) {
       const big = /size|large|413|exceed/i.test(String(error.message || ""));
-      toast(authHint(error) || (big ? "Fichier trop lourd pour Supabase." : "Échec de l'envoi.") );
+      toast(authHint(error) || (big ? "Fichier trop lourd pour Supabase." : "Échec de l'envoi."));
       render(); return;
     }
-    state.form.photoPath = path;
-    toast(video ? "Vidéo ajoutée" : "Photo ajoutée");
+    state.form[field] = path;
+    toast(video ? "Vidéo ajoutée" : audio ? "Son ajouté" : "Photo ajoutée");
     render();
   }
 
@@ -871,9 +1291,9 @@
     }
     const { error } = await sb.from("questions").delete().eq("id", q.id);
     if (error) { toast(authHint(error) || "Suppression impossible."); return; }
-    if (q.photo_path && !state.questions.some(o => o.id !== q.id && o.photo_path === q.photo_path)) {
-      await sb.storage.from(BUCKET).remove([q.photo_path]);
-    }
+    const used = new Set(state.questions.filter(o => o.id !== q.id).flatMap(o => [o.photo_path, o.prompt_media]));
+    const orphans = [q.photo_path, q.prompt_media].filter(p => p && !used.has(p));
+    if (orphans.length) await sb.storage.from(BUCKET).remove(orphans);
     if (state.editingId === q.id) { state.editingId = null; state.form = emptyForm(); }
     toast("Question supprimée");
     refreshAll();

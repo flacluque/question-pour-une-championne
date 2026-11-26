@@ -52,8 +52,8 @@ create policy "quiz supprimables par leur auteur"
 create table if not exists public.questions (
   id          uuid primary key default gen_random_uuid(),
   question    text not null,
-  answers     text[] not null check (array_length(answers, 1) = 4),
-  correct     smallint not null check (correct between 0 and 3),
+  answers     text[] not null,             -- réponses (choix, éléments à ordonner, réponses acceptées…)
+  correct     smallint not null default 0, -- index de la bonne réponse (choix multiple, vrai/faux)
   photo_path  text,                       -- chemin du fichier dans le bucket "photos"
   photo_caption text,                     -- description affichée sous la photo
   position    integer not null default 0, -- ordre d'affichage dans le quiz
@@ -62,6 +62,22 @@ create table if not exists public.questions (
 
 alter table public.questions
   add column if not exists photo_caption text;
+
+-- Types de questions : choice (4 choix), truefalse, slider (curseur), order (remettre dans l'ordre),
+-- text (réponse libre), mystery (photo mystère), blindtest (son à reconnaître)
+alter table public.questions add column if not exists kind text not null default 'choice';
+alter table public.questions add column if not exists data jsonb not null default '{}'::jsonb; -- réglages propres au type
+alter table public.questions add column if not exists prompt_media text;                       -- photo / vidéo / son dans la question
+
+alter table public.questions drop constraint if exists questions_answers_check;
+alter table public.questions drop constraint if exists questions_correct_check;
+alter table public.questions drop constraint if exists questions_answers_len;
+alter table public.questions drop constraint if exists questions_correct_range;
+alter table public.questions drop constraint if exists questions_kind_check;
+alter table public.questions add constraint questions_answers_len check (array_length(answers, 1) between 1 and 12);
+alter table public.questions add constraint questions_correct_range check (correct between 0 and 11);
+alter table public.questions add constraint questions_kind_check
+  check (kind in ('choice', 'truefalse', 'slider', 'order', 'text', 'mystery', 'blindtest'));
 
 alter table public.questions
   add column if not exists quiz_id uuid references public.quizzes (id) on delete cascade;
