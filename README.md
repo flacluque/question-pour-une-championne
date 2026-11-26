@@ -1,17 +1,17 @@
 # Question pour une championne
 
-Un petit quiz à choix multiples (4 réponses) sur moi. Chaque bonne réponse affiche une photo.
-Un espace admin, protégé par un code, permet d'ajouter, modifier, réordonner et supprimer les questions et leurs photos.
+Des quiz à choix multiples (4 réponses). Chaque bonne réponse affiche une photo.
+On choisit son quiz sur la page d'accueil. Chaque admin a son espace, protégé par un code, où il crée ses quiz, les publie quand ils sont prêts, et gère les questions et les photos.
 
 - **Site** : HTML/CSS/JS statique, hébergé sur Vercel
 - **Données et photos** : [Supabase](https://supabase.com) (offre gratuite)
 
 ```
-index.html          page unique (quiz + admin)
+index.html          page unique (liste des quiz, partie, admin)
 style.css
 app.js
-config.js           adresse et clé Supabase à remplir
-supabase/schema.sql tables, règles de sécurité et bucket photos
+config.js           adresse et clé Supabase, comptes admin
+supabase/schema.sql tables (quiz, questions), règles de sécurité, bucket photos
 ```
 
 ## Mise en place (une seule fois, ~10 min)
@@ -24,7 +24,7 @@ supabase/schema.sql tables, règles de sécurité et bucket photos
 ### 2. Créer le compte admin (= le code d'accès)
 
 1. **Authentication → Users → Add user → Create new user**.
-2. E-mail : celui que tu mets dans `config.js` (`adminEmail`). Il n'a pas besoin d'exister vraiment.
+2. E-mail : celui que tu mets dans la liste `admins` de `config.js`. Il n'a pas besoin d'exister vraiment.
 3. Mot de passe : **c'est le code d'accès de l'espace admin** (6 caractères minimum).
 4. Coche **Auto Confirm User**.
 5. Puis **Authentication → Sign In / Providers** (ou *Settings*) : désactive **Allow new users to sign up**, pour que personne d'autre ne puisse créer de compte.
@@ -46,9 +46,23 @@ Ensuite, chaque `git push` sur `main` redéploie le site automatiquement.
 
 ## Utilisation
 
-- Le quiz s'ouvre directement sur la page.
-- **Espace admin** (lien en bas de page) : entre le code, puis ajoute tes questions. Coche la bonne réponse et choisis une photo. Les grosses photos sont réduites automatiquement avant l'envoi.
-- Tu peux changer le code depuis le dashboard.
+- La page d'accueil liste les quiz publiés. On en choisit un pour jouer. Chaque quiz a aussi son propre lien (bouton **Copier le lien** dans l'admin).
+- **Espace admin** (lien en bas de page) : choisis qui tu es, entre ton code, puis :
+  - crée un quiz (titre et description) ; il démarre en **brouillon**, visible seulement par toi ;
+  - ajoute les questions : coche la bonne réponse et choisis une photo (les grosses photos sont réduites avant l'envoi) ;
+  - coche **Publié** quand il est prêt pour qu'il apparaisse sur l'accueil.
+- Chaque admin ne voit et ne modifie que ses propres quiz. Supprimer un quiz supprime aussi ses questions et ses photos.
+- Chacun peut changer son code depuis son espace admin.
+
+## Ajouter un deuxième admin
+
+1. Dans Supabase, **Authentication → Users → Add user → Create new user**, avec un autre e-mail (inventé si tu veux), son code comme mot de passe, et **Auto Confirm User** coché.
+2. Dans `config.js`, ajoute une ligne dans `admins`, par exemple `{ name: "Elle", email: "elle@question-pour-une-championne.fr" }`.
+3. Pousse sur GitHub : Vercel redéploie, et l'écran de connexion propose de choisir entre les deux.
+
+## Mise à jour depuis la version à un seul quiz
+
+Relance tout `supabase/schema.sql` dans le SQL Editor. Le script crée la table des quiz, range les questions existantes dans un premier quiz publié (« Est-ce que tu me connais vraiment ? ») attribué au premier compte admin, et met à jour les règles.
 
 ## Tester en local
 

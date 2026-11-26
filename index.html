@@ -3,26 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Tu me connais ?</title>
-  <meta name="description" content="Un petit quiz pour savoir si tu me connais vraiment.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♥</text></svg>">
+  <title>Question pour une championne</title>
+  <meta name="description" content="Des quiz à choix multiples, avec une photo à gagner à chaque bonne réponse.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232f45c9'/><text x='50' y='72' font-size='64' font-family='Arial' font-weight='700' fill='white' text-anchor='middle'>?</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500&family=Nunito:wght@400;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;600;700;800&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="wrap">
-    <header class="hero">
-      <h1>Est-ce que tu me connais <em>vraiment</em>&nbsp;?</h1>
-      <p class="muted">Une question, quatre réponses. Chaque bonne réponse débloque une photo.</p>
+    <header class="brand">
+      <button class="brand-name" id="home" type="button"><span class="brand-mark" aria-hidden="true">?</span>Question pour une championne</button>
     </header>
 
     <main id="view"></main>
 
     <footer><button class="link" id="adminLink" type="button">Espace admin</button></footer>
   </div>
-  <div class="toast" id="toast" hidden></div>
+  <div class="toast" id="toast" role="status" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script src="config.js"></script>
