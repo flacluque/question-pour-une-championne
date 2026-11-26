@@ -27,7 +27,7 @@ window.QUIZ_CONFIG = {
       lines: [
         "Gnegnegne je suis la plus forte",
         "Prêt fdp ?",
-        "Je suis un pute je perds.",
+        "Je suis une pute je perds.",
         "Allez c'est quand tu veux",
       ],
     },
