@@ -102,6 +102,19 @@
     if (!path || !sb) return null;
     return sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
   }
+  const VIDEO_EXT = ["mp4", "mov", "m4v", "webm", "ogv"];
+  const MAX_VIDEO_MB = 50; // limite d'envoi par fichier de l'offre gratuite Supabase
+  function isVideo(path) { return !!path && VIDEO_EXT.includes(String(path).split(".").pop().toLowerCase()); }
+  // Affiche une photo ou une vidéo selon le fichier
+  function media(path, { cls = null, alt = "", play = false, preview = false } = {}) {
+    const src = photoUrl(path);
+    if (!isVideo(path)) return el("img", { class: cls, src, alt });
+    const v = el("video", { class: cls, src: src + (preview ? "#t=0.1" : ""), playsinline: true, preload: "metadata",
+      "aria-label": alt || "Vidéo" });
+    v.muted = !play; v.playsInline = true;
+    if (play) { v.controls = true; v.autoplay = true; v.loop = true; }
+    return v;
+  }
   let toastTimer;
   function toast(msg) {
     const t = document.getElementById("toast");
@@ -299,7 +312,7 @@
   function startQuiz() {
     FX.sound.whoosh();
     state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.fresh = false;
-    state.questions.forEach(q => { if (q.photo_path) { const i = new Image(); i.src = photoUrl(q.photo_path); } });
+    state.questions.forEach(q => { if (q.photo_path && !isVideo(q.photo_path)) { const i = new Image(); i.src = photoUrl(q.photo_path); } });
     render(); scrollTop();
   }
 
@@ -344,13 +357,13 @@
       if (q.photo_path) {
         if (good) {
           reveal.append(el("figure", { class: "photo develop" },
-            el("img", { src: photoUrl(q.photo_path), alt: q.photo_caption || "Photo" }),
+            media(q.photo_path, { alt: q.photo_caption || "Photo", play: true }),
             el("span", { class: "shine", "aria-hidden": "true" })));
           if (q.photo_caption) reveal.append(el("p", { class: "photo-caption", text: q.photo_caption }));
         } else {
           reveal.append(el("figure", { class: "photo locked" },
-            el("img", { src: photoUrl(q.photo_path), alt: "" }),
-            el("figcaption", { text: "Photo perdue" })));
+            media(q.photo_path, { preview: true }),
+            el("figcaption", { text: isVideo(q.photo_path) ? "Vidéo perdue" : "Photo perdue" })));
         }
       }
       if (!good) reveal.append(el("p", { class: "muted", text: "La bonne réponse était « " + (q.answers || [])[correct] + " »." }));
@@ -372,6 +385,9 @@
       FX.sound.correct();
       FX.confettiFrom(view.querySelector(".answer.is-good"), { count: 60 });
       const photo = view.querySelector(".photo.develop");
+      // Lance la vidéo avec le son (le clic sur la réponse l'autorise) ; sinon en muet
+      const vid = photo && photo.querySelector("video");
+      if (vid) { vid.muted = false; vid.play().catch(() => { vid.muted = true; vid.play().catch(() => {}); }); }
       if (photo) setTimeout(() => { if (photo.isConnected) FX.confettiFrom(photo, { count: 90, spread: 1.4, power: 1.2 }); }, 450);
     } else {
       FX.sound.wrong();
@@ -574,7 +590,7 @@
     else if (!state.questions.length) list.append(el("p", { class: "muted", text: "Aucune question pour l'instant. Ajoute la première avec le formulaire ci-dessus." }));
     else {
       list.append(el("div", { class: "qlist" }, state.questions.map((q, i) => el("div", { class: "qitem" },
-        q.photo_path ? el("img", { class: "thumb", src: photoUrl(q.photo_path), alt: "" }) : el("div", { class: "thumb", text: "sans photo" }),
+        q.photo_path ? media(q.photo_path, { cls: "thumb", preview: true }) : el("div", { class: "thumb", text: "sans photo" }),
         el("div", { class: "meta" },
           el("p", { class: "q", text: (i + 1) + ". " + q.question }),
           el("p", { class: "a", text: "✓ " + ((q.answers || [])[Number(q.correct)] || "") })),
@@ -660,7 +676,7 @@
       el("input", { type: "text", id: "f-ans-" + i, placeholder: "Réponse " + LETTERS[i], value: f.answers[i], oninput: e => (f.answers[i] = e.target.value) }),
     ]);
 
-    const fileInput = el("input", { type: "file", id: "f-photo", accept: "image/*", hidden: true, onchange: e => uploadPhoto(e.target.files[0]) });
+    const fileInput = el("input", { type: "file", id: "f-photo", accept: "image/*,video/*", hidden: true, onchange: e => uploadPhoto(e.target.files[0]) });
     const preview = photoUrl(f.photoPath);
 
     const err = el("p", { class: "notice err", hidden: true });
@@ -694,14 +710,14 @@
         el("span", { class: "label" }, "Réponses ", el("span", { class: "hint", text: "(coche la bonne)" })),
         el("div", { class: "ans-edit" }, rows)),
       el("div", { class: "stack" },
-        el("span", { class: "label", text: "Photo affichée si c'est juste" }),
+        el("span", { class: "label" }, "Photo ou vidéo affichée si c'est juste ", el("span", { class: "hint", text: "(vidéo : " + MAX_VIDEO_MB + " Mo max, de préférence en .mp4)" })),
         el("div", { class: "photo-pick" },
-          preview ? el("img", { src: preview, alt: "Aperçu de la photo" }) : null,
+          preview ? media(f.photoPath, { alt: "Aperçu", preview: true }) : null,
           el("button", { type: "button", class: "ghost small", disabled: state.uploading, onclick: () => fileInput.click(),
-            text: state.uploading ? "Envoi…" : f.photoPath ? "Changer la photo" : "Choisir une photo" }),
+            text: state.uploading ? "Envoi…" : f.photoPath ? "Changer" : "Choisir une photo ou une vidéo" }),
           fileInput,
           f.photoPath ? el("button", { type: "button", class: "link", onclick: () => { f.photoPath = null; render(); }, text: "Retirer" }) : null),
-        f.photoPath ? el("label", { for: "f-caption" }, "Description de la photo ", el("span", { class: "hint", text: "(facultatif)" }),
+        f.photoPath ? el("label", { for: "f-caption" }, "Description ", el("span", { class: "hint", text: "(facultatif)" }),
           el("textarea", { id: "f-caption", class: "caption-input", maxlength: "300", placeholder: "Ex : Notre premier week-end à la montagne, juillet 2024",
             value: f.photoCaption, oninput: e => (f.photoCaption = e.target.value) })) : null),
       err,
@@ -712,15 +728,26 @@
 
   async function uploadPhoto(file) {
     if (!file) return;
+    const fileExt = (file.name.split(".").pop() || "").toLowerCase();
+    const video = (file.type || "").startsWith("video/") || VIDEO_EXT.includes(fileExt);
+    if (video && file.size > MAX_VIDEO_MB * 1024 * 1024) {
+      toast("Vidéo trop lourde (" + Math.round(file.size / 1048576) + " Mo). Maximum " + MAX_VIDEO_MB + " Mo : raccourcis-la ou exporte-la en plus petit.");
+      return;
+    }
     state.uploading = true; render();
-    const blob = await shrinkImage(file);
-    const ext = blob.type === "image/jpeg" ? "jpg" : (file.name.split(".").pop() || "jpg").toLowerCase();
+    const blob = video ? file : await shrinkImage(file);
+    const ext = video ? (VIDEO_EXT.includes(fileExt) ? fileExt : "mp4") : blob.type === "image/jpeg" ? "jpg" : (fileExt || "jpg");
     const path = crypto.randomUUID() + "." + ext;
-    const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || file.type, upsert: false });
+    const contentType = blob.type || file.type || (video ? (ext === "mov" ? "video/quicktime" : "video/" + ext) : "image/jpeg");
+    const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType, upsert: false });
     state.uploading = false;
-    if (error) { toast(authHint(error) || "Échec de l'envoi de la photo."); render(); return; }
+    if (error) {
+      const big = /size|large|413|exceed/i.test(String(error.message || ""));
+      toast(authHint(error) || (big ? "Fichier trop lourd pour Supabase." : "Échec de l'envoi.") );
+      render(); return;
+    }
     state.form.photoPath = path;
-    toast("Photo ajoutée");
+    toast(video ? "Vidéo ajoutée" : "Photo ajoutée");
     render();
   }
 

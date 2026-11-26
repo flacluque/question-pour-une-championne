@@ -202,7 +202,7 @@ code { font-size: .9em; background: var(--accent-soft); padding: 1px 6px; border
   position: absolute; left: 50%; top: 6px; translate: -50% 0; z-index: 3;
   width: 44px; height: 44px; border-radius: 12px; background: var(--accent); color: var(--accent-fg);
   display: grid; place-items: center; font-family: var(--font-display); font-weight: 800; font-size: 1.5rem;
-  box-shadow: 0 8px 20px rgba(47, 69, 201, .35); rotate: 8deg;
+  box-shadow: 0 6px 14px rgba(20, 26, 40, .25); rotate: 8deg;
 }
 .duo-wait .duo-head, .duo-wait .duo-vs { opacity: 0; }
 .duo-enter .duo-left { animation: in-left .9s cubic-bezier(.2, .9, .25, 1.15) both; }
@@ -346,3 +346,11 @@ body::after {
 }
 .caption-input { min-height: 56px; font-weight: 400; }
 @media (prefers-reduced-motion: reduce) { .photo-caption { animation: none; } }
+
+/* Vidéos (mêmes règles que les photos) */
+.photo video { display: block; max-width: 100%; max-height: 440px; border-radius: 8px; background: #000; }
+.photo.develop video { animation: unblur 1.1s .15s ease-out both; }
+.photo.locked video { filter: blur(22px) grayscale(1); opacity: .6; max-height: 180px; }
+.photo-pick video { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); background: #000; }
+video.thumb { background: #000; }
+@media (prefers-reduced-motion: reduce) { .photo.develop video { animation: none; } }
