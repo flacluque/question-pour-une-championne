@@ -114,6 +114,47 @@ create policy "questions modifiables par l'auteur du quiz"
   using (exists (select 1 from public.quizzes q where q.id = quiz_id and q.owner = auth.uid()))
   with check (exists (select 1 from public.quizzes q where q.id = quiz_id and q.owner = auth.uid()));
 
+-- 2b. Résultats des parties ----------------------------------------------
+-- Chaque partie terminée est enregistrée. Tout le monde peut en ajouter une
+-- (on joue sans compte) sur un quiz publié ; seul l'auteur du quiz les lit
+-- et peut les supprimer.
+create table if not exists public.results (
+  id          uuid primary key default gen_random_uuid(),
+  quiz_id     uuid not null references public.quizzes (id) on delete cascade,
+  player      text check (player is null or char_length(player) <= 40),
+  score       smallint not null,
+  total       smallint not null,
+  answers     jsonb not null default '[]'::jsonb, -- détail : question, réponse choisie, bonne réponse
+  created_at  timestamptz not null default now(),
+  check (total between 1 and 200 and score between 0 and total)
+);
+create index if not exists results_quiz_id_idx on public.results (quiz_id, created_at desc);
+
+alter table public.results enable row level security;
+grant insert on public.results to anon, authenticated;
+grant select, delete on public.results to authenticated;
+
+drop policy if exists "résultats enregistrables" on public.results;
+create policy "résultats enregistrables"
+  on public.results for insert
+  to anon, authenticated
+  with check (
+    exists (select 1 from public.quizzes q where q.id = quiz_id and (q.published or q.owner = auth.uid()))
+    and pg_column_size(answers) < 60000
+  );
+
+drop policy if exists "résultats lisibles par l'auteur du quiz" on public.results;
+create policy "résultats lisibles par l'auteur du quiz"
+  on public.results for select
+  to authenticated
+  using (exists (select 1 from public.quizzes q where q.id = quiz_id and q.owner = auth.uid()));
+
+drop policy if exists "résultats supprimables par l'auteur du quiz" on public.results;
+create policy "résultats supprimables par l'auteur du quiz"
+  on public.results for delete
+  to authenticated
+  using (exists (select 1 from public.quizzes q where q.id = quiz_id and q.owner = auth.uid()));
+
 -- 3. Bucket des photos ---------------------------------------------------
 insert into storage.buckets (id, name, public)
 values ('photos', 'photos', true)

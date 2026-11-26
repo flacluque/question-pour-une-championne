@@ -18,6 +18,14 @@
     bad: ["Sérieux ?!", "Raté !", "Aïe…", "Mais non !", "Tu m'as vexé·e."],
   };
   const pickOne = list => list[(Math.random() * list.length) | 0];
+  function shuffle(list) {
+    const a = list.slice();
+    for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; }
+    return a;
+  }
+  // Prénom du joueur, retenu sur cet appareil
+  function storedPlayer() { try { return localStorage.getItem("qpuc-player") || ""; } catch { return ""; } }
+  function storePlayer(v) { try { localStorage.setItem("qpuc-player", v); } catch {} }
   // Phrase perso de la personne (config.js > lines), sans répéter la précédente
   const lastLine = new Map();
   // Réaction de la tête quand on répond (config.js > good / bad), sinon phrases par défaut
@@ -44,7 +52,8 @@
     quizId: null,             // quiz ouvert (partie ou gestion)
     questions: [], questionsFor: null, questionsLoading: false,
     mode: "home",             // home | intro | quiz | end | login | admin | adminQuiz
-    idx: 0, picked: null, results: [], fresh: false,
+    idx: 0, picked: null, results: [], fresh: false, picks: [], orders: null, saved: false,
+    player: storedPlayer(),
     session: null,
     loginErr: "", loginWho: 0,
     form: emptyForm(), editingId: null,
@@ -304,6 +313,10 @@
             ready && !n
               ? el("p", { class: "muted", text: "Ce quiz n'a pas encore de questions." })
               : el("p", { class: "muted", text: "Tu choisis une réponse, et si c'est la bonne, une photo apparaît. À la fin, tu découvres ton score." }))),
+        ready && n ? el("label", { for: "player-name", class: "player-field" }, "Ton prénom ",
+          el("span", { class: "hint", text: "(pour que l'auteur du quiz voie ton score)" }),
+          el("input", { type: "text", id: "player-name", maxlength: "40", autocomplete: "given-name", placeholder: "Ex : Léa",
+            value: state.player, oninput: e => { state.player = e.target.value; storePlayer(e.target.value.trim()); } })) : null,
         el("div", { class: "row" },
           el("button", { type: "button", disabled: !ready || !n, onclick: startQuiz, text: "Commencer" }),
           el("button", { type: "button", class: "ghost", onclick: goHome, text: "Autres quiz" }))));
@@ -311,7 +324,10 @@
 
   function startQuiz() {
     FX.sound.whoosh();
-    state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.fresh = false;
+    state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.picks = []; state.fresh = false;
+    state.saved = false;
+    // Ordre des réponses mélangé à chaque partie (la bonne n'est jamais au même endroit)
+    state.orders = state.questions.map(() => shuffle([0, 1, 2, 3]));
     state.questions.forEach(q => { if (q.photo_path && !isVideo(q.photo_path)) { const i = new Image(); i.src = photoUrl(q.photo_path); } });
     render(); scrollTop();
   }
@@ -330,16 +346,18 @@
     const progress = el("div", { class: "progress", "aria-hidden": "true" },
       qs.map((_, i) => el("span", { class: i < state.results.length ? (state.results[i] ? "done-good" : "done-bad") : i === state.idx ? "current" : "" })));
 
+    const order = (state.orders && state.orders[state.idx]) || [0, 1, 2, 3];
     const answers = el("div", { class: "answers" + (answered ? "" : " answers-in") },
-      (q.answers || []).map((a, i) => {
+      order.map((i, pos) => {
+        const a = (q.answers || [])[i];
         let cls = "answer";
         if (answered) {
           if (i === correct) cls += " is-good" + (fresh ? (good ? " pop" : " hint") : "");
           else if (i === state.picked) cls += " is-bad" + (fresh ? " shake" : "");
           else cls += " is-faded";
         }
-        return el("button", { type: "button", class: cls, style: "--i:" + i, disabled: answered, onclick: () => pick(i) },
-          el("span", { class: "letter", text: LETTERS[i] }), el("span", { class: "txt", text: a }));
+        return el("button", { type: "button", class: cls, style: "--i:" + pos, disabled: answered, onclick: () => pick(i) },
+          el("span", { class: "letter", text: LETTERS[pos] }), el("span", { class: "txt", text: a }));
       }));
 
     const card = el("section", { class: "card" + (fresh && !good ? " card-bad" : "") },
@@ -379,6 +397,7 @@
     const good = i === Number(state.questions[state.idx].correct);
     state.picked = i; state.fresh = true;
     state.results.push(good);
+    (state.picks = state.picks || []).push(i);
     render();
     state.fresh = false;
     if (good) {
@@ -401,7 +420,7 @@
     state.idx++; state.picked = null;
     if (state.idx >= state.questions.length) { state.mode = "end"; state.fresh = true; }
     render(); scrollTop();
-    if (state.mode === "end") celebrate();
+    if (state.mode === "end") { celebrate(); saveResult(); }
   }
 
   // Raccourcis clavier : A-D ou 1-4 pour répondre, Entrée pour continuer
@@ -410,9 +429,27 @@
     if (/^(INPUT|TEXTAREA)$/.test((e.target && e.target.tagName) || "")) return;
     const k = e.key.toLowerCase();
     const idx = "abcd".indexOf(k) >= 0 ? "abcd".indexOf(k) : "1234".indexOf(k);
-    if (state.picked == null && idx >= 0) { e.preventDefault(); pick(idx); }
+    const order = (state.orders && state.orders[state.idx]) || [0, 1, 2, 3];
+    if (state.picked == null && idx >= 0) { e.preventDefault(); pick(order[idx]); }
     else if (state.picked != null && e.key === "Enter" && !(e.target && e.target.tagName === "BUTTON")) { e.preventDefault(); next(); }
   });
+
+  // Enregistre la partie terminée (lisible ensuite par l'auteur du quiz dans l'admin)
+  async function saveResult() {
+    if (!sb || state.saved || !state.quizId) return;
+    state.saved = true;
+    const qs = state.questions;
+    const answers = qs.map((q, k) => {
+      const picked = (state.picks || [])[k];
+      return { q: q.question, picked: picked != null ? (q.answers || [])[picked] : null,
+               correct: (q.answers || [])[Number(q.correct)], good: !!state.results[k] };
+    });
+    const player = (state.player || "").trim().slice(0, 40) || null;
+    const { error } = await sb.from("results").insert({
+      quiz_id: state.quizId, player, score: state.results.filter(Boolean).length, total: qs.length, answers,
+    });
+    if (error) console.warn("Résultat non enregistré :", error.message);
+  }
 
   function endInfo() {
     const total = state.results.length || state.questions.length;
@@ -568,8 +605,10 @@
   function openAdminQuiz(id) {
     state.quizId = id; state.mode = "adminQuiz"; state.questions = [];
     state.editingId = null; state.form = emptyForm();
+    state.quizResults = []; state.resultsError = "";
     render(); scrollTop();
     loadQuestions(id);
+    loadResults(id);
   }
 
   // ---------- admin : un quiz ----------
@@ -601,7 +640,65 @@
           el("button", { type: "button", class: "iconbtn danger", onclick: e => confirmDeleteQuestion(e.currentTarget, q), text: "Supprimer" }))))));
     }
     box.append(list);
+    box.append(renderResults(quiz));
     return box;
+  }
+
+  // ---------- admin : résultats des parties ----------
+  async function loadResults(quizId) {
+    state.resultsFor = quizId; state.resultsLoading = true;
+    const { data, error } = await sb.from("results").select("*").eq("quiz_id", quizId)
+      .order("created_at", { ascending: false }).limit(100);
+    if (state.resultsFor !== quizId) return;
+    state.resultsLoading = false;
+    state.quizResults = error ? [] : (data || []);
+    state.resultsError = error ? "Les résultats n'ont pas pu être chargés." : "";
+    if (state.mode === "adminQuiz") render();
+  }
+
+  const dateFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  function fmtDate(v) { const d = new Date(v); return isNaN(d) ? "" : dateFmt.format(d); }
+
+  function renderResults(quiz) {
+    const list = state.resultsFor === quiz.id ? (state.quizResults || []) : [];
+    const card = el("section", { class: "card" },
+      el("div", { class: "row spread" },
+        el("h3", { text: "Résultats (" + list.length + ")" }),
+        el("button", { type: "button", class: "ghost small", onclick: () => loadResults(quiz.id), text: "Actualiser" })));
+    if (state.resultsLoading && state.resultsFor === quiz.id) { card.append(el("p", { class: "muted", text: "Chargement…" })); return card; }
+    if (state.resultsError) { card.append(el("p", { class: "notice err", text: state.resultsError })); return card; }
+    if (!list.length) { card.append(el("p", { class: "muted", text: "Personne n'a encore terminé ce quiz. Les parties apparaîtront ici." })); return card; }
+
+    card.append(el("div", { class: "results" }, list.map(r => {
+      const ratio = r.total ? r.score / r.total : 0;
+      const tone = ratio >= .7 ? "on" : ratio >= .4 ? "mid" : "low";
+      const answers = Array.isArray(r.answers) ? r.answers : [];
+      const del = el("button", { type: "button", class: "iconbtn danger", onclick: e => { e.preventDefault(); confirmDeleteResult(e.currentTarget, r); }, text: "Supprimer" });
+      return el("details", { class: "result" },
+        el("summary", {},
+          el("span", { class: "pill score-pill " + tone, text: r.score + "/" + r.total }),
+          el("span", { class: "result-who", text: r.player || "Anonyme" }),
+          el("span", { class: "tag", text: fmtDate(r.created_at) })),
+        el("ol", { class: "result-answers" }, answers.map(a => el("li", { class: a.good ? "ok" : "ko" },
+          el("span", { class: "mark", "aria-label": a.good ? "Juste" : "Faux", text: a.good ? "✓" : "✗" }),
+          el("div", { class: "stack", style: "gap:2px;min-width:0" },
+            el("span", { class: "rq", text: a.q }),
+            el("span", { class: "ra", text: a.good ? "« " + a.picked + " »" : "A répondu « " + (a.picked ?? "—") + " », la bonne était « " + a.correct + " »" }))))),
+        el("div", { class: "row", style: "justify-content:flex-end" }, del));
+    })));
+    return card;
+  }
+
+  async function confirmDeleteResult(btn, r) {
+    if (!btn.dataset.armed) {
+      btn.dataset.armed = "1"; btn.textContent = "Confirmer ?";
+      setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = "Supprimer"; } }, 3000);
+      return;
+    }
+    const { error } = await sb.from("results").delete().eq("id", r.id);
+    if (error) { toast(authHint(error) || "Suppression impossible."); return; }
+    toast("Résultat supprimé");
+    loadResults(r.quiz_id);
   }
 
   function renderQuizSettings(quiz) {
