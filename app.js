@@ -4,9 +4,29 @@
   const LETTERS = ["A", "B", "C", "D"];
   const BUCKET = "photos";
   const cfg = window.QUIZ_CONFIG || {};
-  const admins = Array.isArray(cfg.admins) && cfg.admins.length
-    ? cfg.admins.filter(a => a && a.email)
-    : cfg.adminEmail ? [{ name: "Admin", email: cfg.adminEmail }] : [];
+  const people = (Array.isArray(cfg.people) ? cfg.people : Array.isArray(cfg.admins) ? cfg.admins : [])
+    .filter(p => p && (p.email || p.head));
+  if (!people.length && cfg.adminEmail) people.push({ name: "Admin", email: cfg.adminEmail });
+  const admins = people.filter(p => p.email);
+  const heads = people.filter(p => p.head);
+  const FX = window.FX || { sound: new Proxy({}, { get: () => () => {} }), confetti() {}, confettiFrom() {}, reduceMotion: () => true, muted: true };
+
+  // Petites phrases des têtes
+  const LINES = {
+    hello: ["Prêt·e à perdre ?", "Pas de triche !", "Facile, non ?", "On parie ?", "Je t'ai à l'œil.", "Concentre-toi…"],
+    good: ["Bien joué !", "Évidemment.", "Trop fort·e !", "Ok, respect.", "Yes !"],
+    bad: ["Sérieux ?!", "Raté !", "Aïe…", "Mais non !", "Tu m'as vexé·e."],
+  };
+  const pickOne = list => list[(Math.random() * list.length) | 0];
+  // Phrase perso de la personne (config.js > lines), sans répéter la précédente
+  const lastLine = new Map();
+  function helloLine(person) {
+    const list = person && Array.isArray(person.lines) && person.lines.length ? person.lines : LINES.hello;
+    let line = pickOne(list);
+    if (list.length > 1) while (line === lastLine.get(person)) line = pickOne(list);
+    lastLine.set(person, line);
+    return line;
+  }
   const configured = !!(cfg.supabaseUrl && cfg.supabaseAnonKey && !/VOTRE-/.test(cfg.supabaseUrl + cfg.supabaseAnonKey));
   const sb = configured && window.supabase ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey) : null;
 
@@ -19,7 +39,7 @@
     quizId: null,             // quiz ouvert (partie ou gestion)
     questions: [], questionsFor: null, questionsLoading: false,
     mode: "home",             // home | intro | quiz | end | login | admin | adminQuiz
-    idx: 0, picked: null, results: [],
+    idx: 0, picked: null, results: [], fresh: false,
     session: null,
     loginErr: "", loginWho: 0,
     form: emptyForm(), editingId: null,
@@ -30,6 +50,33 @@
   const uid = () => state.session && state.session.user ? state.session.user.id : null;
   const currentQuiz = () => state.quizzes.find(q => q.id === state.quizId) || null;
   const countOf = q => (q.questions && q.questions[0] && q.questions[0].count) || 0;
+  const personFor = quiz => (quiz && people.find(p => p.id && p.id === quiz.owner)) || null;
+  // Celui ou celle qui « présente » une partie : l'auteur du quiz, sinon l'autre tête au hasard
+  function hostFor(quiz) {
+    const p = personFor(quiz);
+    if (p && p.head) return p;
+    return heads.length ? heads[(quiz ? quiz.id.charCodeAt(0) : 0) % heads.length] : null;
+  }
+
+  function headImg(p, cls = "head") {
+    return el("img", { class: cls, src: p.head, alt: p.name ? "Tête de " + p.name : "", draggable: "false" });
+  }
+  function bubble(text, side = "top") {
+    return el("span", { class: "bubble bubble-" + side, text });
+  }
+
+  // Bouton son
+  const soundBtn = document.getElementById("soundToggle");
+  function syncSoundBtn() {
+    if (!soundBtn) return;
+    soundBtn.setAttribute("aria-pressed", String(!FX.muted));
+    soundBtn.setAttribute("aria-label", FX.muted ? "Activer le son" : "Couper le son");
+    soundBtn.classList.toggle("is-muted", FX.muted);
+  }
+  if (soundBtn) {
+    soundBtn.addEventListener("click", () => { FX.muted = !FX.muted; syncSoundBtn(); if (!FX.muted) FX.sound.pop(); });
+    syncSoundBtn();
+  }
 
   // ---------- utilitaires ----------
   function el(tag, attrs = {}, ...kids) {
@@ -156,6 +203,7 @@
 
   function renderHome() {
     const box = el("div", { class: "stack", style: "gap:24px" },
+      renderDuo(),
       pageHead("Choisis ton quiz", "Quatre réponses par question. Chaque bonne réponse dévoile une photo."));
     if (!configured) {
       box.append(el("section", { class: "card empty" },
@@ -173,12 +221,49 @@
       return box;
     }
     box.append(el("div", { class: "quiz-grid" }, list.map(q =>
-      el("button", { type: "button", class: "quiz-card", onclick: () => openQuiz(q.id) },
-        el("span", { class: "tag", text: plural(countOf(q), "question", "questions") }),
+      el("button", { type: "button", class: "quiz-card", onclick: () => { FX.sound.tick(); openQuiz(q.id); } },
+        personFor(q) && personFor(q).head ? headImg(personFor(q), "card-head") : null,
+        el("span", { class: "tag", text: plural(countOf(q), "question", "questions") + (personFor(q) ? " · par " + personFor(q).name : "") }),
         el("h3", { text: q.title }),
         q.description ? el("p", { text: q.description }) : null,
         el("span", { class: "go", text: "Jouer →" })))));
     return box;
+  }
+
+  // Les deux têtes qui arrivent des côtés, se cognent, puis flottent. Un clic les fait parler.
+  let duoPlayed = false;
+  function renderDuo() {
+    if (!heads.length) return null;
+    // On attend que la liste soit chargée pour jouer l'entrée une seule fois, sans saccade
+    const waiting = configured && !state.loaded && !duoPlayed;
+    const first = !waiting && !duoPlayed && !FX.reduceMotion();
+    if (!waiting) duoPlayed = true;
+    const stage = el("div", { class: "duo" + (waiting ? " duo-wait" : first ? " duo-enter" : ""), "aria-hidden": "true" });
+    heads.slice(0, 2).forEach((p, i) => {
+      const side = i === 0 ? "left" : "right";
+      const wrap = el("button", { type: "button", class: "duo-head duo-" + side, tabindex: "-1", onclick: () => poke(wrap, p) },
+        el("span", { class: "float" }, headImg(p)));
+      stage.append(wrap);
+    });
+    stage.append(el("span", { class: "duo-vs", text: "?" }));
+    if (first) setTimeout(() => { if (stage.isConnected) FX.sound.pop(); }, 900);
+    return stage;
+  }
+  function poke(wrap, person) {
+    FX.sound.boing();
+    wrap.classList.remove("poked"); void wrap.offsetWidth; wrap.classList.add("poked");
+    wrap.querySelector(".bubble")?.remove();
+    const b = bubble(helloLine(person), wrap.classList.contains("duo-left") ? "left" : "right");
+    wrap.append(b);
+    setTimeout(() => b.remove(), 2200);
+  }
+
+  function hostEl(quiz, mood = null, line = null) {
+    const p = hostFor(quiz);
+    if (!p) return null;
+    return el("div", { class: "host" + (mood ? " host-" + mood : "") },
+      el("span", { class: "float" }, headImg(p)),
+      line ? bubble(line, "right") : null);
   }
 
   function renderIntro() {
@@ -190,20 +275,25 @@
     }
     const n = state.questions.length;
     const ready = !state.questionsLoading && state.questionsFor === quiz.id;
+    const author = personFor(quiz);
     return el("div", { class: "stack", style: "gap:24px" },
       pageHead(quiz.title, quiz.description || null),
       el("section", { class: "card" },
-        el("span", { class: "tag", text: ready ? plural(n, "question", "questions") : "Chargement des questions…" }),
-        ready && !n
-          ? el("p", { class: "muted", text: "Ce quiz n'a pas encore de questions." })
-          : el("p", { class: "muted", text: "Tu choisis une réponse, et si c'est la bonne, une photo apparaît. À la fin, tu découvres ton score." }),
+        el("div", { class: "q-head" },
+          hostEl(quiz, "hello", ready && n ? helloLine(hostFor(quiz)) : null),
+          el("div", { class: "stack" },
+            el("span", { class: "tag", text: ready ? plural(n, "question", "questions") + (author ? " · par " + author.name : "") : "Chargement des questions…" }),
+            ready && !n
+              ? el("p", { class: "muted", text: "Ce quiz n'a pas encore de questions." })
+              : el("p", { class: "muted", text: "Tu choisis une réponse, et si c'est la bonne, une photo apparaît. À la fin, tu découvres ton score." }))),
         el("div", { class: "row" },
           el("button", { type: "button", disabled: !ready || !n, onclick: startQuiz, text: "Commencer" }),
           el("button", { type: "button", class: "ghost", onclick: goHome, text: "Autres quiz" }))));
   }
 
   function startQuiz() {
-    state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = [];
+    FX.sound.whoosh();
+    state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.fresh = false;
     state.questions.forEach(q => { if (q.photo_path) { const i = new Image(); i.src = photoUrl(q.photo_path); } });
     render(); scrollTop();
   }
@@ -216,35 +306,50 @@
     const q = qs[state.idx];
     const answered = state.picked != null;
     const correct = Number(q.correct);
+    const good = answered && state.picked === correct;
+    const fresh = answered && state.fresh; // premier affichage après le clic : on joue les animations
 
     const progress = el("div", { class: "progress", "aria-hidden": "true" },
       qs.map((_, i) => el("span", { class: i < state.results.length ? (state.results[i] ? "done-good" : "done-bad") : i === state.idx ? "current" : "" })));
 
-    const answers = el("div", { class: "answers" },
+    const answers = el("div", { class: "answers" + (answered ? "" : " answers-in") },
       (q.answers || []).map((a, i) => {
         let cls = "answer";
-        if (answered) cls += i === correct ? " is-good" : i === state.picked ? " is-bad" : " is-faded";
-        return el("button", { type: "button", class: cls, disabled: answered, onclick: () => pick(i) },
+        if (answered) {
+          if (i === correct) cls += " is-good" + (fresh ? (good ? " pop" : " hint") : "");
+          else if (i === state.picked) cls += " is-bad" + (fresh ? " shake" : "");
+          else cls += " is-faded";
+        }
+        return el("button", { type: "button", class: cls, style: "--i:" + i, disabled: answered, onclick: () => pick(i) },
           el("span", { class: "letter", text: LETTERS[i] }), el("span", { class: "txt", text: a }));
       }));
 
-    const card = el("section", { class: "card" },
+    const card = el("section", { class: "card" + (fresh && !good ? " card-bad" : "") },
       progress,
-      el("span", { class: "tag", text: (quiz ? quiz.title + " · " : "") + "Question " + (state.idx + 1) + " sur " + qs.length }),
-      el("h2", { text: q.question }),
+      el("div", { class: "q-head" },
+        hostEl(quiz, answered ? (good ? "good" : "bad") : null, fresh ? pickOne(good ? LINES.good : LINES.bad) : null),
+        el("div", { class: "stack" },
+          el("span", { class: "tag", text: "Question " + (state.idx + 1) + " sur " + qs.length }),
+          el("h2", { class: answered ? "" : "q-in", text: q.question }))),
       answers);
 
     if (answered) {
-      const good = state.picked === correct;
       const reveal = el("div", { class: "reveal " + (good ? "good" : "bad") },
         el("p", { class: "verdict", text: good ? "Bonne réponse !" : "Raté…" }));
-      if (good && q.photo_path) {
-        reveal.append(el("figure", { class: "photo" }, el("img", { src: photoUrl(q.photo_path), alt: "Photo" })));
-      } else if (!good) {
-        reveal.append(el("p", { class: "muted", text: "La bonne réponse était « " + (q.answers || [])[correct] + " ». Pas de photo cette fois." }));
+      if (q.photo_path) {
+        if (good) {
+          reveal.append(el("figure", { class: "photo develop" },
+            el("img", { src: photoUrl(q.photo_path), alt: "Photo" }),
+            el("span", { class: "shine", "aria-hidden": "true" })));
+        } else {
+          reveal.append(el("figure", { class: "photo locked" },
+            el("img", { src: photoUrl(q.photo_path), alt: "" }),
+            el("figcaption", { text: "Photo perdue" })));
+        }
       }
+      if (!good) reveal.append(el("p", { class: "muted", text: "La bonne réponse était « " + (q.answers || [])[correct] + " »." }));
       const last = state.idx === qs.length - 1;
-      reveal.append(el("button", { type: "button", onclick: next, text: last ? "Voir mon score" : "Question suivante" }));
+      reveal.append(el("button", { type: "button", class: "next-btn", onclick: next, text: last ? "Voir mon score" : "Question suivante" }));
       card.append(reveal);
     }
     return card;
@@ -252,31 +357,92 @@
 
   function pick(i) {
     if (state.picked != null) return;
-    state.picked = i;
-    state.results.push(i === Number(state.questions[state.idx].correct));
+    const good = i === Number(state.questions[state.idx].correct);
+    state.picked = i; state.fresh = true;
+    state.results.push(good);
     render();
+    state.fresh = false;
+    if (good) {
+      FX.sound.correct();
+      FX.confettiFrom(view.querySelector(".answer.is-good"), { count: 60 });
+      const photo = view.querySelector(".photo.develop");
+      if (photo) setTimeout(() => { if (photo.isConnected) FX.confettiFrom(photo, { count: 90, spread: 1.4, power: 1.2 }); }, 450);
+    } else {
+      FX.sound.wrong();
+      if (navigator.vibrate) try { navigator.vibrate(120); } catch {}
+    }
+    const r = view.querySelector(".reveal");
+    if (r) setTimeout(() => r.scrollIntoView({ behavior: FX.reduceMotion() ? "auto" : "smooth", block: "nearest" }), 250);
   }
   function next() {
+    FX.sound.tick();
     state.idx++; state.picked = null;
-    if (state.idx >= state.questions.length) state.mode = "end";
+    if (state.idx >= state.questions.length) { state.mode = "end"; state.fresh = true; }
     render(); scrollTop();
+    if (state.mode === "end") celebrate();
+  }
+
+  // Raccourcis clavier : A-D ou 1-4 pour répondre, Entrée pour continuer
+  window.addEventListener("keydown", e => {
+    if (state.mode !== "quiz" || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA)$/.test((e.target && e.target.tagName) || "")) return;
+    const k = e.key.toLowerCase();
+    const idx = "abcd".indexOf(k) >= 0 ? "abcd".indexOf(k) : "1234".indexOf(k);
+    if (state.picked == null && idx >= 0) { e.preventDefault(); pick(idx); }
+    else if (state.picked != null && e.key === "Enter" && !(e.target && e.target.tagName === "BUTTON")) { e.preventDefault(); next(); }
+  });
+
+  function endInfo() {
+    const total = state.results.length || state.questions.length;
+    const score = state.results.filter(Boolean).length;
+    return { total, score, ratio: total ? score / total : 0 };
   }
 
   function renderEnd() {
-    const total = state.results.length || state.questions.length;
-    const score = state.results.filter(Boolean).length;
-    const ratio = total ? score / total : 0;
+    const { total, score, ratio } = endInfo();
     const msg = ratio === 1 ? "Sans faute. Rien ne t'échappe."
       : ratio >= .7 ? "Très fort, tu connais bien le sujet."
       : ratio >= .4 ? "Pas mal ! Il reste quelques mystères à percer."
       : "Il y a encore des choses à découvrir.";
-    return el("section", { class: "card empty" },
+    const mood = ratio >= .7 ? "good" : ratio >= .4 ? "hello" : "bad";
+    const line = ratio === 1 ? "Impressionnant." : ratio >= .7 ? "Pas mal du tout !" : ratio >= .4 ? "Peut mieux faire…" : "On en reparle ?";
+    const scoreEl = el("p", { class: "score", "aria-label": score + " sur " + total },
+      el("span", { class: "score-num", text: state.fresh && !FX.reduceMotion() ? "0" : String(score) }), "/" + total);
+    return el("section", { class: "card empty end" },
       el("span", { class: "tag", text: currentQuiz() ? currentQuiz().title : "Résultat" }),
-      el("p", { class: "score", text: score + "/" + total }),
+      hostEl(currentQuiz(), mood, line),
+      scoreEl,
       el("h2", { text: msg }),
       el("div", { class: "row", style: "justify-content:center" },
         el("button", { type: "button", onclick: startQuiz, text: "Rejouer" }),
         el("button", { type: "button", class: "ghost", onclick: goHome, text: "Autres quiz" })));
+  }
+
+  function celebrate() {
+    state.fresh = false;
+    const { score, ratio } = endInfo();
+    const num = view.querySelector(".score-num");
+    if (num && !FX.reduceMotion() && score > 0) {
+      const t0 = performance.now(), dur = 300 + score * 180;
+      const tick = now => {
+        const k = Math.min(1, (now - t0) / dur);
+        const v = Math.round(score * (1 - Math.pow(1 - k, 3)));
+        if (num.textContent !== String(v)) { num.textContent = String(v); FX.sound.tick(); }
+        if (k < 1) requestAnimationFrame(tick);
+        else done();
+      };
+      requestAnimationFrame(tick);
+    } else { if (num) num.textContent = String(score); done(); }
+    function done() {
+      if (ratio >= .5) {
+        FX.sound.fanfare();
+        const s = view.querySelector(".score");
+        FX.confettiFrom(s, { count: ratio === 1 ? 160 : 80, spread: 1.6, power: 1.3 });
+        if (ratio === 1) setTimeout(() => { FX.confetti(innerWidth * 0.2, innerHeight * 0.4, { count: 80 }); FX.confetti(innerWidth * 0.8, innerHeight * 0.4, { count: 80 }); }, 350);
+      } else {
+        FX.sound.sad();
+      }
+    }
   }
 
   // ---------- admin : connexion ----------
@@ -291,7 +457,8 @@
       ? el("div", { class: "stack" },
           el("span", { class: "label", text: "Qui es-tu ?" }),
           el("div", { class: "who", role: "radiogroup" }, admins.map((a, i) =>
-            el("label", {}, el("input", { type: "radio", name: "who", id: "who-" + i, checked: state.loginWho === i, onchange: () => (state.loginWho = i) }), a.name || "Admin " + (i + 1)))))
+            el("label", {}, el("input", { type: "radio", name: "who", id: "who-" + i, checked: state.loginWho === i, onchange: () => { state.loginWho = i; FX.sound.pop(); } }),
+              a.head ? headImg(a, "who-head") : null, a.name || "Admin " + (i + 1)))))
       : null;
     const form = el("form", { class: "card", onsubmit: async e => {
       e.preventDefault();

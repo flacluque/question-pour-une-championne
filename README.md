@@ -10,7 +10,9 @@ On choisit son quiz sur la page d'accueil. Chaque admin a son espace, protégé 
 index.html          page unique (liste des quiz, partie, admin)
 style.css
 app.js
-config.js           adresse et clé Supabase, comptes admin
+config.js           adresse et clé Supabase, joueurs (nom, tête, compte admin)
+fx.js               sons (générés dans le navigateur) et confettis
+img/                têtes détourées
 supabase/schema.sql tables (quiz, questions), règles de sécurité, bucket photos
 ```
 
@@ -24,7 +26,7 @@ supabase/schema.sql tables (quiz, questions), règles de sécurité, bucket phot
 ### 2. Créer le compte admin (= le code d'accès)
 
 1. **Authentication → Users → Add user → Create new user**.
-2. E-mail : celui que tu mets dans la liste `admins` de `config.js`. Il n'a pas besoin d'exister vraiment.
+2. E-mail : celui que tu mets dans la liste `people` de `config.js`. Il n'a pas besoin d'exister vraiment.
 3. Mot de passe : **c'est le code d'accès de l'espace admin** (6 caractères minimum).
 4. Coche **Auto Confirm User**.
 5. Puis **Authentication → Sign In / Providers** (ou *Settings*) : désactive **Allow new users to sign up**, pour que personne d'autre ne puisse créer de compte.
@@ -57,7 +59,7 @@ Ensuite, chaque `git push` sur `main` redéploie le site automatiquement.
 ## Ajouter un deuxième admin
 
 1. Dans Supabase, **Authentication → Users → Add user → Create new user**, avec un autre e-mail (inventé si tu veux), son code comme mot de passe, et **Auto Confirm User** coché.
-2. Dans `config.js`, ajoute une ligne dans `admins`, par exemple `{ name: "Elle", email: "elle@question-pour-une-championne.fr" }`.
+2. Dans `config.js`, complète sa ligne dans `people` : son `email`, et son `id` (le **User UID** affiché dans Supabase > Authentication > Users) pour que sa tête apparaisse sur ses quiz.
 3. Pousse sur GitHub : Vercel redéploie, et l'écran de connexion propose de choisir entre les deux.
 
 ## Mise à jour depuis la version à un seul quiz
