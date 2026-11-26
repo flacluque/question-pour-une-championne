@@ -3,7 +3,7 @@
 Un petit quiz à choix multiples (4 réponses) sur moi. Chaque bonne réponse affiche une photo.
 Un espace admin, protégé par un code, permet d'ajouter, modifier, réordonner et supprimer les questions et leurs photos.
 
-- **Site** : HTML/CSS/JS statique, hébergé sur GitHub Pages
+- **Site** : HTML/CSS/JS statique, hébergé sur Vercel
 - **Données et photos** : [Supabase](https://supabase.com) (offre gratuite)
 
 ```
@@ -35,17 +35,14 @@ Dans Supabase, **Project Settings → API** (ou *Data API*) : copie le **Project
 
 La clé `anon` est faite pour être publique. Elle permet seulement de lire les questions et les photos : les règles de `schema.sql` réservent l'écriture au compte admin connecté.
 
-### 4. Publier sur GitHub Pages
+### 4. Publier sur Vercel
 
-```bash
-git add .
-git commit -m "Quiz"
-git branch -M main
-git remote add origin https://github.com/<ton-pseudo>/question-pour-une-championne.git
-git push -u origin main
-```
+1. Sur vercel.com, connecte-toi avec GitHub puis **Add New… → Project**.
+2. Importe le repo `flacluque/question-pour-une-championne`.
+3. **Framework Preset : Other**. Laisse vides la commande de build et le dossier de sortie : le site n'a rien à compiler.
+4. Clique sur **Deploy**. Le site est en ligne en quelques secondes, à une adresse du type `https://question-pour-une-championne.vercel.app`.
 
-Sur GitHub : **Settings → Pages → Build and deployment → Source : Deploy from a branch**, branche `main`, dossier `/ (root)`. Le site sera en ligne après une minute à l'adresse `https://<ton-pseudo>.github.io/question-pour-une-championne/`.
+Ensuite, chaque `git push` sur `main` redéploie le site automatiquement.
 
 ## Utilisation
 
