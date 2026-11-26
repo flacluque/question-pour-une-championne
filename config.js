@@ -26,13 +26,15 @@ window.QUIZ_CONFIG = {
       bad: ["Oh, tarpin déçu"],
     },
     {
-      name: "Elle", head: "img/elle.png", email: "", id: "",
+      name: "Clara", head: "img/elle.png", email: "clara@question-pour-une-championne.fr", id: "74595754-3bb9-4e2a-b242-a00e39c2a682",
       lines: [
         "Gnegnegne je suis la plus forte",
         "Prêt fdp ?",
         "Je suis une pute je perds.",
         "Allez c'est quand tu veux",
       ],
+      good: ["Bravo fdp !"],
+      bad: ["Ok."],
     },
   ],
 };
