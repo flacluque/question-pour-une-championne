@@ -1,5 +1,6 @@
 // Détoure les bonhommes (fond blanc) et les adoucit pour le motif de fond.
-// Usage : swift tools/stickers.swift <dossier images> <dossier sortie> [taille max, défaut 260]
+// Usage : swift tools/stickers.swift <dossier images> <dossier sortie> [taille max, défaut 260] [saturation, défaut 0.55] [luminosité, défaut 0.06]
+// (saturation 1 et luminosité 0 = couleurs d'origine)
 // Chaque image produit <nom>.png : sujet détouré, recadré, désaturé et éclairci.
 import Foundation
 import CoreImage
@@ -10,6 +11,8 @@ let args = CommandLine.arguments
 guard args.count >= 3 else { print("usage: stickers <in> <out> [max]"); exit(1) }
 let inDir = URL(fileURLWithPath: args[1]), outDir = URL(fileURLWithPath: args[2])
 let maxSide = CGFloat(args.count > 3 ? Double(args[3])! : 260)
+let saturation = Float(args.count > 4 ? Double(args[4])! : 0.55)
+let brightness = Float(args.count > 5 ? Double(args[5])! : 0.06)
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
 let exts = ["jpg", "jpeg", "png", "webp", "heic"]
@@ -31,7 +34,7 @@ for url in files {
 
   // Adoucir : moins saturé, un peu plus clair
   let cc = CIFilter.colorControls()
-  cc.inputImage = img; cc.saturation = 0.55; cc.brightness = 0.06; cc.contrast = 0.85
+  cc.inputImage = img; cc.saturation = saturation; cc.brightness = brightness; cc.contrast = saturation >= 1 ? 1 : 0.85
   img = cc.outputImage!
 
   let s = min(1, maxSide / max(img.extent.width, img.extent.height))
