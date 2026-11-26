@@ -14,6 +14,12 @@ create table if not exists public.questions (
 
 alter table public.questions enable row level security;
 
+-- Droits de base sur la table (les nouveaux projets Supabase ne les donnent plus automatiquement).
+-- Les règles RLS ci-dessous restent appliquées par-dessus.
+grant usage on schema public to anon, authenticated;
+grant select on public.questions to anon, authenticated;
+grant insert, update, delete on public.questions to authenticated;
+
 -- Tout le monde peut lire les questions (le quiz est public)
 drop policy if exists "questions lisibles par tous" on public.questions;
 create policy "questions lisibles par tous"
