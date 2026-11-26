@@ -11,6 +11,7 @@ window.QUIZ_CONFIG = {
   //   Le code d'accès est le mot de passe de ce compte. Chacun ne voit et ne modifie que ses quiz.
   // - id : le "User UID" de ce compte dans Supabase, pour afficher sa tête sur ses quiz
   // - lines : les phrases que dit sa tête quand on clique dessus sur l'accueil
+  // - good / bad : ce que dit sa tête quand on répond juste / faux à un de ses quiz
   people: [
     {
       name: "Lui", head: "img/lui.png", email: "admin@question-pour-une-championne.fr", id: "dd22ed40-8aea-4207-9fae-94225c83249b",
@@ -21,6 +22,8 @@ window.QUIZ_CONFIG = {
         "Tié un monstroooo",
         "Allez le sang c'est quand tu veux",
       ],
+      good: ["Tié un tigre"],
+      bad: ["Oh, tarpin déçu"],
     },
     {
       name: "Elle", head: "img/elle.png", email: "", id: "",

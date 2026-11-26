@@ -20,6 +20,11 @@
   const pickOne = list => list[(Math.random() * list.length) | 0];
   // Phrase perso de la personne (config.js > lines), sans répéter la précédente
   const lastLine = new Map();
+  // Réaction de la tête quand on répond (config.js > good / bad), sinon phrases par défaut
+  function reactionLine(person, good) {
+    const own = person && person[good ? "good" : "bad"];
+    return pickOne(Array.isArray(own) && own.length ? own : good ? LINES.good : LINES.bad);
+  }
   function helloLine(person) {
     const list = person && Array.isArray(person.lines) && person.lines.length ? person.lines : LINES.hello;
     let line = pickOne(list);
@@ -46,7 +51,7 @@
     uploading: false, saving: false,
   };
 
-  function emptyForm() { return { question: "", answers: ["", "", "", ""], correct: 0, photoPath: null }; }
+  function emptyForm() { return { question: "", answers: ["", "", "", ""], correct: 0, photoPath: null, photoCaption: "" }; }
   const uid = () => state.session && state.session.user ? state.session.user.id : null;
   const currentQuiz = () => state.quizzes.find(q => q.id === state.quizId) || null;
   const countOf = q => (q.questions && q.questions[0] && q.questions[0].count) || 0;
@@ -327,7 +332,7 @@
     const card = el("section", { class: "card" + (fresh && !good ? " card-bad" : "") },
       progress,
       el("div", { class: "q-head" },
-        hostEl(quiz, answered ? (good ? "good" : "bad") : null, fresh ? pickOne(good ? LINES.good : LINES.bad) : null),
+        hostEl(quiz, answered ? (good ? "good" : "bad") : null, fresh ? reactionLine(hostFor(quiz), good) : null),
         el("div", { class: "stack" },
           el("span", { class: "tag", text: "Question " + (state.idx + 1) + " sur " + qs.length }),
           el("h2", { class: answered ? "" : "q-in", text: q.question }))),
@@ -339,8 +344,9 @@
       if (q.photo_path) {
         if (good) {
           reveal.append(el("figure", { class: "photo develop" },
-            el("img", { src: photoUrl(q.photo_path), alt: "Photo" }),
+            el("img", { src: photoUrl(q.photo_path), alt: q.photo_caption || "Photo" }),
             el("span", { class: "shine", "aria-hidden": "true" })));
+          if (q.photo_caption) reveal.append(el("p", { class: "photo-caption", text: q.photo_caption }));
         } else {
           reveal.append(el("figure", { class: "photo locked" },
             el("img", { src: photoUrl(q.photo_path), alt: "" }),
@@ -638,7 +644,7 @@
 
   function startEdit(q) {
     state.editingId = q.id;
-    state.form = { question: q.question, answers: [...q.answers], correct: Number(q.correct), photoPath: q.photo_path };
+    state.form = { question: q.question, answers: [...q.answers], correct: Number(q.correct), photoPath: q.photo_path, photoCaption: q.photo_caption || "" };
     render();
     document.getElementById("f-question")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -667,7 +673,7 @@
       if (!question) return showErr("Écris la question.");
       if (answers.some(a => !a)) return showErr("Remplis les quatre réponses.");
       state.saving = true; saveBtn.disabled = true;
-      const row = { question, answers, correct: f.correct, photo_path: f.photoPath || null };
+      const row = { question, answers, correct: f.correct, photo_path: f.photoPath || null, photo_caption: f.photoPath && f.photoCaption.trim() ? f.photoCaption.trim() : null };
       let error;
       if (editing) {
         ({ error } = await sb.from("questions").update(row).eq("id", state.editingId));
@@ -694,7 +700,10 @@
           el("button", { type: "button", class: "ghost small", disabled: state.uploading, onclick: () => fileInput.click(),
             text: state.uploading ? "Envoi…" : f.photoPath ? "Changer la photo" : "Choisir une photo" }),
           fileInput,
-          f.photoPath ? el("button", { type: "button", class: "link", onclick: () => { f.photoPath = null; render(); }, text: "Retirer" }) : null)),
+          f.photoPath ? el("button", { type: "button", class: "link", onclick: () => { f.photoPath = null; render(); }, text: "Retirer" }) : null),
+        f.photoPath ? el("label", { for: "f-caption" }, "Description de la photo ", el("span", { class: "hint", text: "(facultatif)" }),
+          el("textarea", { id: "f-caption", class: "caption-input", maxlength: "300", placeholder: "Ex : Notre premier week-end à la montagne, juillet 2024",
+            value: f.photoCaption, oninput: e => (f.photoCaption = e.target.value) })) : null),
       err,
       el("div", { class: "row" },
         saveBtn,

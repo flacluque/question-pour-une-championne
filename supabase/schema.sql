@@ -55,9 +55,13 @@ create table if not exists public.questions (
   answers     text[] not null check (array_length(answers, 1) = 4),
   correct     smallint not null check (correct between 0 and 3),
   photo_path  text,                       -- chemin du fichier dans le bucket "photos"
+  photo_caption text,                     -- description affichée sous la photo
   position    integer not null default 0, -- ordre d'affichage dans le quiz
   created_at  timestamptz not null default now()
 );
+
+alter table public.questions
+  add column if not exists photo_caption text;
 
 alter table public.questions
   add column if not exists quiz_id uuid references public.quizzes (id) on delete cascade;
