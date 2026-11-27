@@ -63,7 +63,7 @@
   function emptyForm(kind = "choice") {
     return { kind, question: "", answers: ["", "", "", ""], correct: 0, tf: 0,
       slider: { min: "0", max: "100", step: "1", unit: "", answer: "", tol: "0" },
-      order: ["", "", "", ""], accepted: "", promptPath: null, effect: "blur", focus: { x: 50, y: 45 },
+      order: ["", "", "", ""], accepted: "", blindMode: "choice", promptPath: null, effect: "blur", focus: { x: 50, y: 45 },
       photoPath: null, photoCaption: "" };
   }
   const uid = () => state.session && state.session.user ? state.session.user.id : null;
@@ -203,6 +203,7 @@
 
   async function boot() {
     render();
+    playSplash();
     if (sb) {
       const { data } = await sb.auth.getSession();
       state.session = data.session;
@@ -244,7 +245,7 @@
   function renderHome() {
     const box = el("div", { class: "stack", style: "gap:24px" },
       renderDuo(),
-      pageHead("Choisis ton quiz", "Quatre réponses par question. Chaque bonne réponse dévoile une photo."));
+      pageHead("Choisis ton quiz", "Choix multiples, vrai ou faux, blind test, photo mystère… À chaque bonne réponse, une photo ou une vidéo se débloque."));
     if (!configured) {
       box.append(el("section", { class: "card empty" },
         el("h2", { text: "Il reste à brancher Supabase" }),
@@ -289,6 +290,74 @@
     if (first) setTimeout(() => { if (stage.isConnected) FX.sound.pop(); }, 900);
     return stage;
   }
+  // ---------- ouverture : le titre en géant, les deux têtes, puis tout rejoint sa place ----------
+  const SPLASH_WORDS = ["Question", "pour une", "championne"];
+  function playSplash() {
+    let seen = false;
+    try { seen = sessionStorage.getItem("qpuc-splash") === "1"; } catch {}
+    if (seen || location.hash || state.mode !== "home" || FX.reduceMotion()) return;
+    try { sessionStorage.setItem("qpuc-splash", "1"); } catch {}
+    duoPlayed = true; // l'entrée des têtes se fait ici, pas une seconde fois sur l'accueil
+    render();
+    window.scrollTo(0, 0);
+    document.body.classList.add("splashing");
+
+    const mark = el("span", { class: "splash-mark", text: "?" });
+    const words = SPLASH_WORDS.map((w, i) => el("span", { class: "splash-word" + (i === 2 ? " accent" : ""), style: "--w:" + i },
+      [...w].map((c, j) => el("span", { class: "splash-ch", style: "--c:" + j, text: c }))));
+    const pair = heads.slice(0, 2).map((p, i) => el("span", { class: "splash-head splash-head-" + (i ? "r" : "l") },
+      el("span", { class: "float" }, headImg(p))));
+    const overlay = el("div", { class: "splash", "aria-hidden": "true" },
+      el("div", { class: "splash-stage" },
+        mark,
+        el("div", { class: "splash-title" }, words),
+        pair.length ? el("div", { class: "splash-heads" }, pair) : null));
+    document.body.append(overlay);
+
+    const timers = [];
+    const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+    at(150, () => FX.sound.whoosh());
+    at(600, () => FX.sound.pop());
+    SPLASH_WORDS.forEach((_, i) => at(700 + i * 280, () => FX.sound.tick()));
+    if (pair.length) at(2350, () => { FX.sound.boing(); overlay.classList.add("bumped"); });
+
+    let leaving = false;
+    const leave = () => {
+      if (leaving) return;
+      leaving = true;
+      timers.forEach(clearTimeout);
+      FX.sound.whoosh();
+      overlay.classList.add("leaving");
+      const DUR = 800, ease = "cubic-bezier(.65, 0, .25, 1)";
+      const fly = (node, target, delay = 0, extra = {}) => {
+        if (!node || !target) return null;
+        const a = node.getBoundingClientRect(), b = target.getBoundingClientRect();
+        if (!a.width || !b.width) return null;
+        const s = b.width / a.width;
+        const dx = b.left + b.width / 2 - (a.left + a.width / 2), dy = b.top + b.height / 2 - (a.top + a.height / 2);
+        return node.animate([{ transform: "translate(0, 0) scale(1)", ...extra.from }, { transform: `translate(${dx}px, ${dy}px) scale(${s})`, ...extra.to }],
+          { duration: DUR, delay, easing: ease, fill: "forwards" });
+      };
+      const brandWords = document.querySelectorAll(".brand .bw");
+      const anims = [
+        fly(mark, document.querySelector(".brand-mark")),
+        ...words.map((w, i) => fly(w, brandWords[i], 40 + i * 50, i === 2 ? { from: { color: getComputedStyle(w).color }, to: { color: getComputedStyle(document.body).color } } : {})),
+        ...pair.map((h, i) => fly(h, document.querySelector(".duo .duo-" + (i ? "right" : "left")), 90)),
+      ].filter(Boolean);
+      // Le décor s'efface pendant que tout vole vers sa place
+      overlay.animate([{ backgroundColor: getComputedStyle(overlay).backgroundColor }, { backgroundColor: "transparent" }], { duration: DUR, easing: ease, fill: "forwards" });
+      Promise.all(anims.map(a => a.finished.catch(() => {}))).then(() => {
+        document.body.classList.remove("splashing");
+        document.body.classList.add("splash-landed");
+        overlay.remove();
+        setTimeout(() => document.body.classList.remove("splash-landed"), 1200);
+      });
+    };
+    at(3700, leave);
+    overlay.addEventListener("pointerdown", leave);
+    window.addEventListener("keydown", function onKey() { window.removeEventListener("keydown", onKey); leave(); });
+  }
+
   function poke(wrap, person) {
     FX.sound.boing();
     wrap.classList.remove("poked"); void wrap.offsetWidth; wrap.classList.add("poked");
@@ -325,7 +394,7 @@
             el("span", { class: "tag", text: ready ? plural(n, "question", "questions") + (author ? " · par " + author.name : "") : "Chargement des questions…" }),
             ready && !n
               ? el("p", { class: "muted", text: "Ce quiz n'a pas encore de questions." })
-              : el("p", { class: "muted", text: "Tu choisis une réponse, et si c'est la bonne, une photo apparaît. À la fin, tu découvres ton score." }))),
+              : el("p", { class: "muted", text: "À chaque bonne réponse, une photo ou une vidéo se débloque. À la fin, tu découvres ton score." }))),
         ready && n ? el("label", { for: "player-name", class: "player-field" }, "Ton prénom ",
           el("span", { class: "hint", text: "(pour que l'auteur du quiz voie ton score)" }),
           el("input", { type: "text", id: "player-name", maxlength: "40", autocomplete: "given-name", placeholder: "Ex : Léa",
@@ -348,13 +417,16 @@
   const kindOf = q => (q && KINDS[q.kind] ? q.kind : "choice");
   const isChoiceKind = k => k === "choice" || k === "mystery" || k === "blindtest";
   const qData = q => (q && q.data && typeof q.data === "object" ? q.data : {});
+  // Façon de répondre : un blind test peut se jouer en choix multiple ou en réponse libre
+  const answerKindOf = (k, mode) => (k === "blindtest" && mode === "text" ? "text" : k);
+  const answerKind = q => answerKindOf(kindOf(q), qData(q).answer);
   function num(v) { const n = parseFloat(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : NaN; }
   const numFmt = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 });
   function withUnit(v, unit) { return numFmt.format(v) + (unit ? " " + unit : ""); }
 
   // La bonne réponse, en texte (pour l'affichage et l'historique)
   function correctText(q) {
-    const k = kindOf(q), a = q.answers || [], d = qData(q);
+    const k = answerKind(q), a = q.answers || [], d = qData(q);
     if (k === "slider") return withUnit(num(d.answer), d.unit);
     if (k === "order") return a.join(" → ");
     if (k === "text") return a[0] || "";
@@ -395,7 +467,7 @@
     state.saved = false;
     // Ordre des réponses mélangé à chaque partie (la bonne n'est jamais au même endroit)
     state.orders = state.questions.map(q => {
-      const k = kindOf(q);
+      const k = answerKind(q);
       if (k === "truefalse") return [0, 1];
       return isChoiceKind(k) ? shuffle((q.answers || []).map((_, i) => i)) : null;
     });
@@ -409,9 +481,9 @@
   // Brouillon de la réponse en cours (curseur, ordre, texte)
   function initDraft() {
     const q = state.questions[state.idx];
-    state.outcome = null;
+    state.outcome = null; state.blindLevel = 0;
     if (!q) { state.draft = null; return; }
-    const k = kindOf(q), d = qData(q);
+    const k = answerKind(q), d = qData(q);
     if (k === "slider") {
       const min = num(d.min), max = num(d.max), step = num(d.step) || 1;
       state.draft = { value: Math.round(((min + max) / 2 - min) / step) * step + min };
@@ -447,9 +519,9 @@
           el("span", { class: "tag", text: "Question " + (state.idx + 1) + " sur " + qs.length + (k !== "choice" ? " · " + KINDS[k].label : "") }),
           el("h2", { class: answered ? "" : "q-in", text: q.question }))),
       renderPrompt(q, answered),
-      renderAnswerArea(q, k, answered, good, fresh));
+      renderAnswerArea(q, answerKind(q), answered, good, fresh));
 
-    if (answered) card.append(renderReveal(q, k, good));
+    if (answered) card.append(renderReveal(q, answerKind(q), good));
     return card;
   }
 
@@ -457,7 +529,7 @@
   function renderPrompt(q, answered) {
     const path = q.prompt_media;
     if (!path) return null;
-    if (isAudio(path)) return renderAudioPlayer(path, answered);
+    if (isAudio(path) || kindOf(q) === "blindtest") return renderAudioPlayer(path, answered, q);
     const d = qData(q);
     const effect = kindOf(q) === "mystery" ? (d.effect || "blur") : "none";
     const fx = el("div", { class: "prompt-media fx-" + effect + (answered ? " revealed" : "") });
@@ -469,22 +541,60 @@
     return fx;
   }
 
-  function renderAudioPlayer(path, answered) {
-    const audio = el("audio", { src: photoUrl(path), preload: "auto" });
-    const btn = el("button", { type: "button", class: "blind-play", "aria-label": "Écouter l'extrait" },
+  // Blind test : l'extrait s'allonge par niveaux (3 s, puis 5 s, puis 10 s). Après la réponse, on écoute en entier.
+  const BLIND_LEVELS = [3, 5, 10];
+  function renderAudioPlayer(path, answered, q) {
+    const video = isVideo(path);
+    const m = el(video ? "video" : "audio", { src: photoUrl(path), preload: "auto", playsinline: "" });
+    if (video) { m.className = "blind-video"; if (answered) m.controls = true; }
+    const limited = !answered && kindOf(q) === "blindtest";
+    const limit = () => (limited ? BLIND_LEVELS[state.blindLevel || 0] : Infinity);
+    const bar = el("span", { class: "blind-bar", "aria-hidden": "true" }, el("i"));
+    const btn = el("button", { type: "button", class: "blind-play" },
       el("span", { class: "blind-icon", "aria-hidden": "true", text: "▶" }),
       el("span", { class: "eq", "aria-hidden": "true" }, el("i"), el("i"), el("i"), el("i"), el("i")),
-      el("span", { class: "blind-label", text: "Écouter l'extrait" }));
-    const set = playing => {
+      el("span", { class: "blind-label" }));
+    const more = el("button", { type: "button", class: "ghost small blind-more", hidden: true });
+    const level = el("p", { class: "blind-level muted" });
+    let listened = false, raf = 0;
+    const idleLabel = () => limited ? "Écouter " + limit() + " s" : (m.currentTime > 0 ? "Réécouter" : answered ? "Écouter en entier" : "Écouter l'extrait");
+    const update = playing => {
       btn.classList.toggle("playing", playing);
       btn.querySelector(".blind-icon").textContent = playing ? "❚❚" : "▶";
-      btn.querySelector(".blind-label").textContent = playing ? "En écoute…" : (audio.currentTime > 0 ? "Réécouter" : "Écouter l'extrait");
+      btn.querySelector(".blind-label").textContent = playing ? "En écoute…" : idleLabel();
+      btn.setAttribute("aria-label", playing ? "Mettre en pause" : idleLabel());
+      if (!limited) return;
+      const lv = state.blindLevel || 0;
+      level.textContent = "Niveau " + (lv + 1) + " sur " + BLIND_LEVELS.length + " · extrait de " + limit() + " secondes";
+      const nextLv = BLIND_LEVELS[lv + 1];
+      more.hidden = !(listened && nextLv) || playing;
+      if (nextLv) more.textContent = "Pas trouvé ? Écouter " + nextLv + " s";
     };
-    btn.addEventListener("click", () => { if (audio.paused) { audio.play().catch(() => toast("Impossible de lire ce son sur cet appareil.")); } else audio.pause(); });
-    audio.addEventListener("play", () => set(true));
-    audio.addEventListener("pause", () => set(false));
-    audio.addEventListener("ended", () => { audio.currentTime = 0; set(false); });
-    return el("div", { class: "blind" + (answered ? " done" : "") }, btn, audio);
+    const tick = () => {
+      const lim = limit();
+      bar.firstChild.style.width = (Number.isFinite(lim) ? Math.min(100, m.currentTime / lim * 100) : (m.duration ? m.currentTime / m.duration * 100 : 0)) + "%";
+      if (m.currentTime >= lim) { m.pause(); m.currentTime = 0; bar.firstChild.style.width = "0%"; return; }
+      if (!m.paused) raf = requestAnimationFrame(tick);
+    };
+    const play = () => {
+      if (limited) m.currentTime = 0;
+      m.play().catch(() => toast("Impossible de lire ce son sur cet appareil."));
+    };
+    btn.addEventListener("click", () => { if (m.paused) play(); else { m.pause(); if (limited) m.currentTime = 0; } });
+    more.addEventListener("click", () => {
+      state.blindLevel = Math.min(BLIND_LEVELS.length - 1, (state.blindLevel || 0) + 1);
+      FX.sound.tick();
+      play();
+    });
+    m.addEventListener("play", () => { listened = true; update(true); cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); });
+    m.addEventListener("pause", () => { cancelAnimationFrame(raf); update(false); });
+    m.addEventListener("ended", () => { m.currentTime = 0; update(false); });
+    update(false);
+    return el("div", { class: "blind" + (answered ? " done" : "") },
+      video ? m : null,
+      el("div", { class: "blind-controls" }, btn, bar, video ? null : m),
+      limited ? level : null,
+      limited ? more : null);
   }
 
   function renderAnswerArea(q, k, answered, good, fresh) {
@@ -579,6 +689,7 @@
     const d = qData(q);
     const reveal = el("div", { class: "reveal " + (good ? "good" : "bad") },
       el("p", { class: "verdict", text: good ? (k === "slider" && o.value !== num(d.answer) ? "Bien vu !" : "Bonne réponse !") : "Raté…" }));
+    if (good && o.secs) reveal.append(el("p", { class: "blind-found", text: o.secs === BLIND_LEVELS[0] ? "Trouvé en " + o.secs + " secondes, chapeau !" : "Trouvé avec l'extrait de " + o.secs + " secondes." }));
     if (q.photo_path) {
       if (good) {
         reveal.append(el("figure", { class: "photo develop" },
@@ -636,12 +747,16 @@
     if (state.picked != null) return;
     const q = state.questions[state.idx];
     state.picked = true; state.fresh = true;
+    if (kindOf(q) === "blindtest") {
+      extra.secs = BLIND_LEVELS[state.blindLevel || 0];
+      pickedText = (pickedText || "") + " (extrait de " + extra.secs + " s)";
+    }
     state.outcome = { good, ...extra };
     state.results.push(good);
     (state.log = state.log || []).push({ q: q.question, picked: pickedText, correct: correctText(q), good });
     render();
     state.fresh = false;
-    const prompt = view.querySelector(".blind audio");
+    const prompt = view.querySelector(".blind audio, .blind video");
     if (prompt && !prompt.paused) prompt.pause();
     if (good) {
       FX.sound.correct();
@@ -676,7 +791,7 @@
     if (state.mode !== "quiz" || e.metaKey || e.ctrlKey || e.altKey) return;
     if (/^(INPUT|TEXTAREA)$/.test((e.target && e.target.tagName) || "")) return;
     const q = state.questions[state.idx];
-    const k = kindOf(q);
+    const k = answerKind(q);
     const key = e.key.toLowerCase();
     if (state.picked == null) {
       if (k === "truefalse" && (key === "v" || key === "f")) { e.preventDefault(); answerChoice(key === "v" ? 0 : 1); return; }
@@ -880,7 +995,7 @@
       list.append(el("div", { class: "qlist" }, state.questions.map((q, i) => el("div", { class: "qitem" },
         (q.photo_path || q.prompt_media) ? media(q.photo_path || q.prompt_media, { cls: "thumb", preview: true }) : el("div", { class: "thumb", text: "sans photo" }),
         el("div", { class: "meta" },
-          el("span", { class: "kind-tag", text: KINDS[kindOf(q)].label }),
+          el("span", { class: "kind-tag", text: KINDS[kindOf(q)].label + (kindOf(q) === "blindtest" ? (answerKind(q) === "text" ? " · réponse libre" : " · choix") : "") }),
           el("p", { class: "q", text: (i + 1) + ". " + q.question }),
           el("p", { class: "a", text: "✓ " + correctText(q) + (kindOf(q) === "slider" && num(qData(q).tol) ? " (±" + withUnit(num(qData(q).tol), qData(q).unit) + ")" : "") })),
         el("div", { class: "acts" },
@@ -1008,12 +1123,14 @@
   function startEdit(q) {
     const k = kindOf(q), d = qData(q), a = q.answers || [];
     const f = emptyForm(k);
+    if (k === "blindtest") f.blindMode = d.answer === "text" ? "text" : "choice";
     Object.assign(f, { question: q.question, photoPath: q.photo_path, photoCaption: q.photo_caption || "", promptPath: q.prompt_media || null });
-    if (isChoiceKind(k)) { f.answers = [0, 1, 2, 3].map(i => a[i] || ""); f.correct = Number(q.correct) || 0; }
+    const ak = answerKind(q);
+    if (isChoiceKind(ak)) { f.answers = [0, 1, 2, 3].map(i => a[i] || ""); f.correct = Number(q.correct) || 0; }
     if (k === "truefalse") f.tf = Number(q.correct) === 1 ? 1 : 0;
     if (k === "slider") f.slider = { min: String(d.min ?? 0), max: String(d.max ?? 100), step: String(d.step ?? 1), unit: d.unit || "", answer: String(d.answer ?? ""), tol: String(d.tol ?? 0) };
     if (k === "order") f.order = a.slice();
-    if (k === "text") f.accepted = a.join("\n");
+    if (ak === "text") f.accepted = a.join("\n");
     if (k === "mystery") { f.effect = d.effect || "blur"; f.focus = { x: d.focus_x ?? 50, y: d.focus_y ?? 45 }; }
     state.editingId = q.id;
     state.form = f;
@@ -1024,10 +1141,10 @@
 
   // Construit la ligne à enregistrer, ou renvoie un message d'erreur
   function buildRow(f) {
-    const k = f.kind;
+    const k = answerKindOf(f.kind, f.blindMode);
     const question = f.question.trim();
     if (!question) return { error: "Écris la question." };
-    const row = { kind: k, question, correct: 0, data: {}, prompt_media: null,
+    const row = { kind: f.kind, question, correct: 0, data: {}, prompt_media: null,
       photo_path: f.photoPath || null, photo_caption: f.photoPath && f.photoCaption.trim() ? f.photoCaption.trim() : null };
     if (isChoiceKind(k)) {
       const answers = f.answers.map(a => a.trim());
@@ -1061,7 +1178,8 @@
       row.prompt_media = f.promptPath;
       row.data = { effect: f.effect, focus_x: Math.round(f.focus.x), focus_y: Math.round(f.focus.y) };
     }
-    if (k === "blindtest") {
+    if (f.kind === "blindtest") {
+      row.data = { answer: f.blindMode === "text" ? "text" : "choice" };
       if (!f.promptPath || !(isAudio(f.promptPath) || isVideo(f.promptPath))) return { error: "Ajoute le son (ou la vidéo) à reconnaître." };
       row.prompt_media = f.promptPath;
     }
@@ -1131,7 +1249,15 @@
   }
 
   function renderAnswerFields(f) {
-    const k = f.kind;
+    const k = answerKindOf(f.kind, f.blindMode);
+    const modePick = f.kind !== "blindtest" ? null : el("div", { class: "stack" },
+      el("span", { class: "label", text: "Façon de répondre" }),
+      el("div", { class: "who" }, [["choice", "Plusieurs choix"], ["text", "Réponse libre"]].map(([v, t]) =>
+        el("label", {}, el("input", { type: "radio", name: "f-blind-mode", id: "f-blind-" + v, checked: f.blindMode === v, onchange: () => { f.blindMode = v; render(); } }), t))));
+    const fields = answerFieldsFor(f, k);
+    return modePick ? el("div", { class: "stack" }, modePick, fields) : fields;
+  }
+  function answerFieldsFor(f, k) {
     if (isChoiceKind(k)) {
       const rows = [0, 1, 2, 3].flatMap(i => [
         el("input", { type: "radio", name: "f-correct", id: "f-correct-" + i, "aria-label": "La réponse " + LETTERS[i] + " est la bonne", checked: f.correct === i, onchange: () => (f.correct = i) }),
