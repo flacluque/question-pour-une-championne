@@ -541,8 +541,8 @@
     return fx;
   }
 
-  // Blind test : l'extrait s'allonge par niveaux (3 s, puis 5 s, puis 10 s). Après la réponse, on écoute en entier.
-  const BLIND_LEVELS = [3, 5, 10];
+  // Blind test : l'extrait s'allonge par niveaux (1 s, puis 3 s, puis 5 s). Après la réponse, on écoute en entier.
+  const BLIND_LEVELS = [1, 3, 5];
   function renderAudioPlayer(path, answered, q) {
     const video = isVideo(path);
     const m = el(video ? "video" : "audio", { src: photoUrl(path), preload: "auto", playsinline: "" });
@@ -565,7 +565,7 @@
       btn.setAttribute("aria-label", playing ? "Mettre en pause" : idleLabel());
       if (!limited) return;
       const lv = state.blindLevel || 0;
-      level.textContent = "Niveau " + (lv + 1) + " sur " + BLIND_LEVELS.length + " · extrait de " + limit() + " secondes";
+      level.textContent = "Niveau " + (lv + 1) + " sur " + BLIND_LEVELS.length + " · extrait de " + plural(limit(), "seconde", "secondes");
       const nextLv = BLIND_LEVELS[lv + 1];
       more.hidden = !(listened && nextLv) || playing;
       if (nextLv) more.textContent = "Pas trouvé ? Écouter " + nextLv + " s";
@@ -586,8 +586,16 @@
       FX.sound.tick();
       play();
     });
-    m.addEventListener("play", () => { listened = true; update(true); cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); });
-    m.addEventListener("pause", () => { cancelAnimationFrame(raf); update(false); });
+    let stopTimer = 0;
+    m.addEventListener("play", () => {
+      listened = true; update(true); cancelAnimationFrame(raf); raf = requestAnimationFrame(tick);
+      clearTimeout(stopTimer);
+      const left = limit() - m.currentTime;
+      if (Number.isFinite(left)) stopTimer = setTimeout(() => { if (!m.paused) { m.pause(); m.currentTime = 0; bar.firstChild.style.width = "0%"; } }, Math.max(0, left * 1000));
+    });
+    m.addEventListener("pause", () => { cancelAnimationFrame(raf); clearTimeout(stopTimer); update(false); });
+    // Filet de sécurité si l'onglet ralentit les animations : on coupe aussi à la mise à jour du temps
+    m.addEventListener("timeupdate", () => { if (!m.paused && m.currentTime >= limit()) tick(); });
     m.addEventListener("ended", () => { m.currentTime = 0; update(false); });
     update(false);
     return el("div", { class: "blind" + (answered ? " done" : "") },
@@ -689,7 +697,7 @@
     const d = qData(q);
     const reveal = el("div", { class: "reveal " + (good ? "good" : "bad") },
       el("p", { class: "verdict", text: good ? (k === "slider" && o.value !== num(d.answer) ? "Bien vu !" : "Bonne réponse !") : "Raté…" }));
-    if (good && o.secs) reveal.append(el("p", { class: "blind-found", text: o.secs === BLIND_LEVELS[0] ? "Trouvé en " + o.secs + " secondes, chapeau !" : "Trouvé avec l'extrait de " + o.secs + " secondes." }));
+    if (good && o.secs) reveal.append(el("p", { class: "blind-found", text: o.secs === BLIND_LEVELS[0] ? "Trouvé en " + plural(o.secs, "seconde", "secondes") + ", chapeau !" : "Trouvé avec l'extrait de " + o.secs + " secondes." }));
     if (q.photo_path) {
       if (good) {
         reveal.append(el("figure", { class: "photo develop" },
