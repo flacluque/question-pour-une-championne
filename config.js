@@ -37,4 +37,9 @@ window.QUIZ_CONFIG = {
       bad: ["Ok."],
     },
   ],
+  // Les chats qui se baladent sur le site. "secret" : le message qui s'affiche après 5 clics sur le chat.
+  pets: [
+    { name: "Blanche", head: "img/blanche.png", pitch: 1.15, secret: "Blanche t'a à l'œil 👀" },
+    { name: "Seven", head: "img/seven.png", pitch: 0.9, secret: "Seven approuve ce quiz 😼" },
+  ],
 };

@@ -213,7 +213,7 @@
 
   async function boot() {
     render();
-    playSplash();
+    if (!playSplash()) CATS.start();
     if (sb) {
       const { data } = await sb.auth.getSession();
       state.session = data.session;
@@ -249,6 +249,7 @@
     screenCleanups = [];
     // Musique d'ambiance : seulement pendant les questions
     if (state.mode === "quiz") FX.music.start(); else FX.music.stop();
+    CATS.calm(state.mode === "quiz");
     view.replaceChildren();
     adminLink.hidden = ["admin", "adminQuiz", "login"].includes(state.mode);
     const fn = { home: renderHome, intro: renderIntro, quiz: renderQuiz, end: renderEnd, login: renderLogin, admin: renderAdmin, adminQuiz: renderAdminQuiz }[state.mode];
@@ -312,7 +313,7 @@
   function playSplash() {
     let seen = false;
     try { seen = sessionStorage.getItem("qpuc-splash") === "1"; } catch {}
-    if (seen || location.hash || state.mode !== "home" || FX.reduceMotion()) return;
+    if (seen || location.hash || state.mode !== "home" || FX.reduceMotion()) return false;
     try { sessionStorage.setItem("qpuc-splash", "1"); } catch {}
     duoPlayed = true; // l'entrée des têtes se fait ici, pas une seconde fois sur l'accueil
     render();
@@ -324,7 +325,11 @@
       [...w].map((c, j) => el("span", { class: "splash-ch", style: "--c:" + j, text: c }))));
     const pair = heads.slice(0, 2).map((p, i) => el("span", { class: "splash-head splash-head-" + (i ? "r" : "l") },
       el("span", { class: "float" }, headImg(p))));
+    // Les chats passent en courant derrière les têtes
+    const runners = CATS.pets.slice(0, 2).map((p, i) => el("span", { class: "splash-cat splash-cat-" + i },
+      el("span", { class: "splash-cat-hop" }, el("img", { src: p.head, alt: "", draggable: "false" }))));
     const overlay = el("div", { class: "splash", "aria-hidden": "true" },
+      runners,
       el("div", { class: "splash-stage" },
         mark,
         el("div", { class: "splash-title" }, words),
@@ -337,6 +342,7 @@
     at(600, () => FX.sound.pop());
     SPLASH_WORDS.forEach((_, i) => at(700 + i * 280, () => FX.sound.tick()));
     if (pair.length) at(2350, () => { FX.sound.boing(); overlay.classList.add("bumped"); });
+    runners.forEach((_, i) => at(1500 + i * 450, () => FX.sound.meow((CATS.pets[i] && CATS.pets[i].pitch) || 1)));
 
     let leaving = false;
     const leave = () => {
@@ -367,12 +373,14 @@
         document.body.classList.remove("splashing");
         document.body.classList.add("splash-landed");
         overlay.remove();
+        CATS.start();
         setTimeout(() => document.body.classList.remove("splash-landed"), 1200);
       });
     };
     at(3700, leave);
     overlay.addEventListener("pointerdown", leave);
     window.addEventListener("keydown", function onKey() { window.removeEventListener("keydown", onKey); leave(); });
+    return true;
   }
 
   function poke(wrap, person) {
@@ -848,6 +856,7 @@
     state.fresh = false;
     const prompt = view.querySelector(".blind audio, .blind video");
     if (prompt && !prompt.paused) prompt.pause();
+    CATS.react(good ? "good" : "bad");
     if (good) {
       FX.sound.correct();
       FX.confettiFrom(view.querySelector(".answer.is-good, .slider-value, .order-list, .text-answer"), { count: 60 });
@@ -1025,7 +1034,10 @@
           FX.sound.fanfare();
           const s = view.querySelector(".score");
           FX.confettiFrom(s, { count: ratio === 1 ? 160 : 80, spread: 1.6, power: 1.3 });
-          if (ratio === 1) setTimeout(() => { FX.confetti(innerWidth * 0.2, innerHeight * 0.4, { count: 80 }); FX.confetti(innerWidth * 0.8, innerHeight * 0.4, { count: 80 }); }, 350);
+          if (ratio === 1) {
+            CATS.react("perfect");
+            setTimeout(() => { FX.confetti(innerWidth * 0.2, innerHeight * 0.4, { count: 80 }); FX.confetti(innerWidth * 0.8, innerHeight * 0.4, { count: 80 }); }, 350);
+          }
         } else {
           FX.sound.sad();
         }

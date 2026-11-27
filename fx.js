@@ -79,6 +79,26 @@
         noise(i / 22, 0.07, { vol: 0.05 + 0.2 * k * k, hp: 900, lp: 5200 });
       }
     },
+    // Miaou synthétisé : une voyelle qui glisse « mi-a-ou » (pitch > 1 = plus aigu)
+    meow(pitch = 1) {
+      const c = audio(); if (!c || muted) return;
+      const t0 = c.currentTime, d = 0.55;
+      const osc = c.createOscillator(), bp = c.createBiquadFilter(), g = c.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(430 * pitch, t0);
+      osc.frequency.linearRampToValueAtTime(760 * pitch, t0 + 0.14);
+      osc.frequency.linearRampToValueAtTime(520 * pitch, t0 + d);
+      bp.type = "bandpass"; bp.Q.value = 4;
+      bp.frequency.setValueAtTime(900, t0);
+      bp.frequency.linearRampToValueAtTime(2100, t0 + 0.16);
+      bp.frequency.linearRampToValueAtTime(800, t0 + d);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.06);
+      g.gain.setValueAtTime(0.42, t0 + 0.3);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      osc.connect(bp); bp.connect(g); g.connect(master);
+      osc.start(t0); osc.stop(t0 + d + 0.05);
+    },
     crash() {
       noise(0, 1.4, { vol: 0.22, hp: 4500 });
       note(110, 0, 0.35, { type: "sine", vol: 0.35, to: 45 });
