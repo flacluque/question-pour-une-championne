@@ -97,6 +97,16 @@
     syncSoundBtn();
   }
 
+  // La musique se baisse quand un son ou une vidéo joue (blind test, récompense)
+  const playingMedia = new Set();
+  const syncDuck = () => FX.music.duck([...playingMedia].some(m => m.isConnected && !m.paused && !m.muted));
+  ["play", "playing", "volumechange"].forEach(ev => document.addEventListener(ev, e => {
+    if (e.target instanceof HTMLMediaElement) { playingMedia.add(e.target); syncDuck(); }
+  }, true));
+  ["pause", "ended", "emptied"].forEach(ev => document.addEventListener(ev, e => {
+    if (e.target instanceof HTMLMediaElement) { if (e.target.paused) playingMedia.delete(e.target); syncDuck(); }
+  }, true));
+
   // ---------- utilitaires ----------
   function el(tag, attrs = {}, ...kids) {
     const n = document.createElement(tag);
@@ -231,7 +241,14 @@
   document.getElementById("home").addEventListener("click", goHome);
 
   // ---------- rendu ----------
+  // Petites tâches liées à l'écran affiché (minuteurs, écouteurs) : coupées à chaque nouveau rendu
+  let screenCleanups = [];
+  function onLeave(fn) { screenCleanups.push(fn); }
   function render() {
+    screenCleanups.forEach(fn => { try { fn(); } catch {} });
+    screenCleanups = [];
+    // Musique d'ambiance : seulement pendant les questions
+    if (state.mode === "quiz") FX.music.start(); else FX.music.stop();
     view.replaceChildren();
     adminLink.hidden = ["admin", "adminQuiz", "login"].includes(state.mode);
     const fn = { home: renderHome, intro: renderIntro, quiz: renderQuiz, end: renderEnd, login: renderLogin, admin: renderAdmin, adminQuiz: renderAdminQuiz }[state.mode];
@@ -367,11 +384,74 @@
     setTimeout(() => b.remove(), 2200);
   }
 
+  // Le présentateur vit pendant la question : il se penche vers le doigt / la souris,
+  // transpire si on hésite, et réagit au hasard quand on survole une réponse (pour bluffer, jamais un indice)
+  const WAIT_LINES = ["Tic tac…", "Tu sèches ?", "Je m'endors là", "Alors ?", "Prends ton temps… ou pas"];
+  const NAG_LINES = ["Toujours rien ?", "J'ai le temps de faire un café", "Allez, un petit effort", "Je compte jusqu'à 3…"];
+  const LAUGH_LINES = ["Hihi", "Oh oh", "Ha ha ha", "Si tu le dis…"];
+  const THINK_LINES = ["Mouais…", "Hmm…", "Intéressant…", "T'es sûr·e ?", "Vraiment ?"];
+  function hostLife(card) {
+    const host = card.querySelector(".q-head .host");
+    if (!host) return;
+    const lean = host.querySelector(".lean");
+    const reduce = FX.reduceMotion();
+    const timers = [];
+    onLeave(() => timers.forEach(clearTimeout));
+
+    if (!reduce && lean) {
+      const onMove = e => {
+        const r = host.getBoundingClientRect();
+        const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+        const d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 360);
+        lean.style.setProperty("--lx", (dx / d * 7 * k).toFixed(1) + "px");
+        lean.style.setProperty("--ly", (dy / d * 4 * k).toFixed(1) + "px");
+        lean.style.setProperty("--lr", (dx / d * 10 * k).toFixed(1) + "deg");
+      };
+      window.addEventListener("pointermove", onMove, { passive: true });
+      window.addEventListener("pointerdown", onMove, { passive: true });
+      onLeave(() => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerdown", onMove); });
+    }
+
+    let lastSay = 0;
+    const say = (line, cls) => {
+      lastSay = performance.now();
+      host.querySelector(".bubble")?.remove();
+      const b = bubble(line, "right");
+      host.append(b);
+      if (cls && !reduce) { host.classList.remove("react-laugh", "react-think"); void host.offsetWidth; host.classList.add(cls); }
+      timers.push(setTimeout(() => { b.remove(); if (cls) host.classList.remove(cls); }, 1900));
+    };
+
+    const sweat = () => {
+      host.classList.add("sweat");
+      if (!host.querySelector(".sweat-drop")) host.append(el("span", { class: "sweat-drop", "aria-hidden": "true" }));
+    };
+    const elapsed = performance.now() - (state.qStart || performance.now());
+    if (state.qSweat) sweat();
+    else timers.push(setTimeout(() => { state.qSweat = true; sweat(); say(pickOne(WAIT_LINES)); }, Math.max(0, 10000 - elapsed)));
+    if (!state.qNag) timers.push(setTimeout(() => { state.qNag = true; say(pickOne(NAG_LINES), "react-think"); }, Math.max(0, 24000 - elapsed)));
+
+    if (window.matchMedia && matchMedia("(hover: hover)").matches) {
+      card.querySelectorAll(".answer").forEach(a => {
+        let t = 0;
+        a.addEventListener("pointerenter", () => {
+          t = setTimeout(() => {
+            if (performance.now() - lastSay < 2600 || Math.random() < 0.3) return;
+            const laugh = Math.random() < 0.5;
+            say(pickOne(laugh ? LAUGH_LINES : THINK_LINES), laugh ? "react-laugh" : "react-think");
+          }, 600);
+          timers.push(t);
+        });
+        a.addEventListener("pointerleave", () => clearTimeout(t));
+      });
+    }
+  }
+
   function hostEl(quiz, mood = null, line = null) {
     const p = hostFor(quiz);
     if (!p) return null;
     return el("div", { class: "host" + (mood ? " host-" + mood : "") },
-      el("span", { class: "float" }, headImg(p)),
+      el("span", { class: "lean" }, el("span", { class: "float" }, headImg(p))),
       line ? bubble(line, "right") : null);
   }
 
@@ -482,6 +562,7 @@
   function initDraft() {
     const q = state.questions[state.idx];
     state.outcome = null; state.blindLevel = 0;
+    state.qStart = performance.now(); state.qSweat = false; state.qNag = false;
     if (!q) { state.draft = null; return; }
     const k = answerKind(q), d = qData(q);
     if (k === "slider") {
@@ -522,6 +603,7 @@
       renderAnswerArea(q, answerKind(q), answered, good, fresh));
 
     if (answered) card.append(renderReveal(q, answerKind(q), good));
+    else hostLife(card);
     return card;
   }
 
@@ -784,14 +866,33 @@
     if (r) setTimeout(() => r.scrollIntoView({ behavior: FX.reduceMotion() ? "auto" : "smooth", block: "nearest" }), 250);
   }
 
+  // La carte se retourne comme au jeu télé : demi-tour, nouvelle question, fin du tour
+  let flipping = false;
   function next() {
+    if (flipping) return;
     FX.sound.tick();
     view.querySelectorAll("audio, video").forEach(m => { try { m.pause(); } catch {} });
-    state.idx++; state.picked = null;
-    if (state.idx >= state.questions.length) { state.mode = "end"; state.fresh = true; }
-    else initDraft();
-    render(); scrollTop();
-    if (state.mode === "end") { celebrate(); saveResult(); }
+    const card = view.querySelector(":scope > .card");
+    const go = () => {
+      state.idx++; state.picked = null;
+      if (state.idx >= state.questions.length) { state.mode = "end"; state.fresh = true; state.endPhase = FX.reduceMotion() ? "show" : "roll"; recordBest(); }
+      else initDraft();
+      render(); scrollTop();
+      if (state.mode === "end") { celebrate(); saveResult(); }
+    };
+    if (!card || FX.reduceMotion() || !card.animate) return go();
+    flipping = true;
+    FX.sound.whoosh();
+    card.animate([{ transform: "perspective(1400px) rotateY(0)" }, { transform: "perspective(1400px) rotateY(90deg)", opacity: .6 }],
+      { duration: 230, easing: "cubic-bezier(.5, 0, .9, .4)", fill: "forwards" }).finished.then(() => {
+      go();
+      flipping = false;
+      const fresh = view.querySelector(":scope > .card");
+      if (fresh && fresh.animate) fresh.animate([
+        { transform: "perspective(1400px) rotateY(-90deg)", opacity: .6 },
+        { transform: "perspective(1400px) rotateY(8deg)", opacity: 1, offset: .7 },
+        { transform: "perspective(1400px) rotateY(0)" }], { duration: 420, easing: "cubic-bezier(.2, .7, .3, 1)" });
+    }, () => { flipping = false; go(); });
   }
 
   // Raccourcis clavier : A-D (ou 1-4) pour les choix, V / F pour vrai ou faux, Entrée pour continuer
@@ -829,7 +930,47 @@
     return { total, score, ratio: total ? score / total : 0 };
   }
 
+  // Meilleurs scores de ce quiz, gardés sur l'appareil (les résultats en ligne ne sont lisibles que par l'auteur)
+  const bestKey = id => "qpuc-best-" + id;
+  function readBest(id) {
+    try { const v = JSON.parse(localStorage.getItem(bestKey(id)) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+  }
+  function recordBest() {
+    if (!state.quizId) return;
+    const { total, score } = endInfo();
+    const entry = { score, total, player: (state.player || "").trim().slice(0, 40), at: Date.now() };
+    state.lastBest = entry.at;
+    const list = readBest(state.quizId).concat(entry)
+      .sort((x, y) => y.score / y.total - x.score / x.total || x.at - y.at).slice(0, 20);
+    try { localStorage.setItem(bestKey(state.quizId), JSON.stringify(list)); } catch {}
+  }
+  function renderPodium() {
+    const top = readBest(state.quizId).slice(0, 3);
+    if (!top.length) return null;
+    const places = [1, 0, 2]; // 2e, 1er, 3e
+    return el("div", { class: "podium-wrap" },
+      el("p", { class: "label", text: "Meilleurs scores sur cet appareil" }),
+      el("div", { class: "podium" }, places.map(i => {
+        const r = top[i];
+        if (!r) return el("div", { class: "podium-col empty-col" });
+        const me = r.at === state.lastBest;
+        return el("div", { class: "podium-col place-" + (i + 1) + (me ? " me" : ""), style: "--d:" + [0.35, 0.2, 0.5][i] + "s" },
+          el("span", { class: "podium-name", text: me ? "Toi, là" : (r.player || "Anonyme") }),
+          el("span", { class: "podium-score", text: r.score + "/" + r.total }),
+          el("span", { class: "podium-step" }, el("span", { class: "podium-rank", text: i === 0 ? "1er" : (i + 1) + "e" })));
+      })));
+  }
+
   function renderEnd() {
+    const quiz = currentQuiz();
+    // 1er temps : roulement de tambour, les deux têtes trépignent
+    if (state.endPhase === "roll") {
+      return el("section", { class: "card empty end end-roll" },
+        el("span", { class: "tag", text: quiz ? quiz.title : "Résultat" }),
+        el("div", { class: "drum-duo", "aria-hidden": "true" },
+          heads.slice(0, 2).map((p, i) => el("span", { class: "drum-head drum-" + (i ? "r" : "l") }, headImg(p)))),
+        el("p", { class: "suspense" }, "Et ton score est", el("span", { class: "dots", "aria-hidden": "true" }, el("i", { text: "." }), el("i", { text: "." }), el("i", { text: "." }))));
+    }
     const { total, score, ratio } = endInfo();
     const msg = ratio === 1 ? "Sans faute. Rien ne t'échappe."
       : ratio >= .7 ? "Très fort, tu connais bien le sujet."
@@ -839,39 +980,55 @@
     const line = ratio === 1 ? "Impressionnant." : ratio >= .7 ? "Pas mal du tout !" : ratio >= .4 ? "Peut mieux faire…" : "On en reparle ?";
     const scoreEl = el("p", { class: "score", "aria-label": score + " sur " + total },
       el("span", { class: "score-num", text: state.fresh && !FX.reduceMotion() ? "0" : String(score) }), "/" + total);
-    return el("section", { class: "card empty end" },
-      el("span", { class: "tag", text: currentQuiz() ? currentQuiz().title : "Résultat" }),
-      hostEl(currentQuiz(), mood, line),
+    return el("section", { class: "card empty end" + (state.fresh ? " end-fresh" : "") },
+      el("span", { class: "tag", text: quiz ? quiz.title : "Résultat" }),
+      hostEl(quiz, mood, line),
       scoreEl,
       el("h2", { text: msg }),
+      renderPodium(),
       el("div", { class: "row", style: "justify-content:center" },
         el("button", { type: "button", onclick: startQuiz, text: "Rejouer" }),
         el("button", { type: "button", class: "ghost", onclick: goHome, text: "Autres quiz" })));
   }
 
   function celebrate() {
-    state.fresh = false;
-    const { score, ratio } = endInfo();
-    const num = view.querySelector(".score-num");
-    if (num && !FX.reduceMotion() && score > 0) {
-      const t0 = performance.now(), dur = 300 + score * 180;
-      const tick = now => {
-        const k = Math.min(1, (now - t0) / dur);
-        const v = Math.round(score * (1 - Math.pow(1 - k, 3)));
-        if (num.textContent !== String(v)) { num.textContent = String(v); FX.sound.tick(); }
-        if (k < 1) requestAnimationFrame(tick);
-        else done();
-      };
-      requestAnimationFrame(tick);
-    } else { if (num) num.textContent = String(score); done(); }
-    function done() {
-      if (ratio >= .5) {
-        FX.sound.fanfare();
-        const s = view.querySelector(".score");
-        FX.confettiFrom(s, { count: ratio === 1 ? 160 : 80, spread: 1.6, power: 1.3 });
-        if (ratio === 1) setTimeout(() => { FX.confetti(innerWidth * 0.2, innerHeight * 0.4, { count: 80 }); FX.confetti(innerWidth * 0.8, innerHeight * 0.4, { count: 80 }); }, 350);
-      } else {
-        FX.sound.sad();
+    if (state.endPhase === "roll") {
+      FX.sound.drumroll(1.9);
+      const run = state.lastBest;
+      setTimeout(() => {
+        if (state.mode !== "end" || state.endPhase !== "roll" || state.lastBest !== run) return;
+        state.endPhase = "show";
+        render();
+        FX.sound.crash();
+        reveal();
+      }, 2000);
+      return;
+    }
+    reveal();
+    function reveal() {
+      state.fresh = false;
+      const { score, ratio } = endInfo();
+      const num = view.querySelector(".score-num");
+      if (num && !FX.reduceMotion() && score > 0) {
+        const t0 = performance.now(), dur = 250 + score * 120;
+        const tick = now => {
+          const k = Math.min(1, (now - t0) / dur);
+          const v = Math.round(score * (1 - Math.pow(1 - k, 3)));
+          if (num.textContent !== String(v)) { num.textContent = String(v); FX.sound.tick(); }
+          if (k < 1) requestAnimationFrame(tick);
+          else done();
+        };
+        requestAnimationFrame(tick);
+      } else { if (num) num.textContent = String(score); done(); }
+      function done() {
+        if (ratio >= .5) {
+          FX.sound.fanfare();
+          const s = view.querySelector(".score");
+          FX.confettiFrom(s, { count: ratio === 1 ? 160 : 80, spread: 1.6, power: 1.3 });
+          if (ratio === 1) setTimeout(() => { FX.confetti(innerWidth * 0.2, innerHeight * 0.4, { count: 80 }); FX.confetti(innerWidth * 0.8, innerHeight * 0.4, { count: 80 }); }, 350);
+        } else {
+          FX.sound.sad();
+        }
       }
     }
   }

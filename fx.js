@@ -4,7 +4,7 @@
   const reduceMotion = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ---------- son ----------
-  let ctx = null, master = null;
+  let ctx = null, master = null, musicBus = null, noiseBuf = null;
   let muted = false;
   try { muted = localStorage.getItem("qpuc-muted") === "1"; } catch {}
 
@@ -16,6 +16,9 @@
       master = ctx.createGain();
       master.gain.value = 0.5;
       master.connect(ctx.destination);
+      musicBus = ctx.createGain();
+      musicBus.gain.value = 0;
+      musicBus.connect(master);
     }
     if (ctx.state === "suspended") ctx.resume();
     return ctx;
@@ -45,7 +48,41 @@
     osc.start(t0); osc.stop(t0 + dur + 0.05);
   }
 
+  // Bruit blanc (caisse claire, charleston, cymbale)
+  function noise(at, dur, { vol = 0.2, hp = 1000, lp = null, dest = null, decay = true } = {}) {
+    const c = audio(); if (!c || muted) return;
+    if (!noiseBuf) {
+      noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const t0 = c.currentTime + at;
+    const src = c.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const h = c.createBiquadFilter(); h.type = "highpass"; h.frequency.value = hp;
+    const g = c.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    if (decay) g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    else g.gain.setValueAtTime(0.0001, t0 + dur);
+    let node = h;
+    src.connect(h);
+    if (lp) { const l = c.createBiquadFilter(); l.type = "lowpass"; l.frequency.value = lp; h.connect(l); node = l; }
+    node.connect(g); g.connect(dest || master);
+    src.start(t0); src.stop(t0 + dur + 0.05);
+  }
+
   const sound = {
+    // Roulement de tambour qui monte, pour l'annonce du score
+    drumroll(dur = 1.8) {
+      const hits = Math.round(dur * 22);
+      for (let i = 0; i < hits; i++) {
+        const k = i / hits;
+        noise(i / 22, 0.07, { vol: 0.05 + 0.2 * k * k, hp: 900, lp: 5200 });
+      }
+    },
+    crash() {
+      noise(0, 1.4, { vol: 0.22, hp: 4500 });
+      note(110, 0, 0.35, { type: "sine", vol: 0.35, to: 45 });
+    },
     tick() { note(1250, 0, 0.04, { type: "square", vol: 0.06 }); },
     correct() {
       [659.25, 830.61, 987.77, 1318.5].forEach((f, i) => note(f, i * 0.075, 0.22, { vol: 0.28 }));
@@ -122,11 +159,84 @@
     confetti(r.left + r.width / 2, r.top + r.height / 2, opts);
   }
 
+  // ---------- musique d'ambiance ----------
+  // Petite boucle façon jeu télé, synthétisée en direct : basse, accords en contretemps, charleston, mélodie de marimba.
+  const BPM = 108, BEAT = 60 / BPM;
+  const MIDI = n => 440 * Math.pow(2, (n - 69) / 12);
+  // 4 mesures : Fmaj7 · Em7 · Dm7 · G7 (degrés en notes MIDI)
+  const BARS = [
+    { bass: [41, 48], chord: [57, 60, 64, 65] },
+    { bass: [40, 47], chord: [55, 59, 62, 64] },
+    { bass: [38, 45], chord: [57, 60, 62, 65] },
+    { bass: [43, 50], chord: [55, 59, 62, 65] },
+  ];
+  const MELODY = [ // [mesure, temps (en croches), note]
+    [0, 0, 72], [0, 3, 76], [0, 6, 77], [1, 2, 76], [1, 4, 74], [1, 6, 71],
+    [2, 0, 74], [2, 3, 77], [2, 6, 81], [3, 1, 79], [3, 4, 77], [3, 6, 74],
+  ];
+  let music = { on: false, timer: 0, next: 0, step: 0, duck: false, round: 0 };
+  function mnote(freq, t, dur, type, vol, lp) {
+    const c = ctx;
+    const osc = c.createOscillator(), g = c.createGain();
+    osc.type = type; osc.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let node = osc;
+    if (lp) { const f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = lp; osc.connect(f); node = f; }
+    node.connect(g); g.connect(musicBus);
+    osc.start(t); osc.stop(t + dur + 0.05);
+  }
+  function scheduleStep(i, t) {
+    const bar = BARS[Math.floor(i / 8) % 4], e = i % 8; // e : croche dans la mesure
+    if (e === 0 || e === 4) mnote(MIDI(bar.bass[e === 0 ? 0 : 1]), t, BEAT * 0.9, "triangle", 0.5, 600);
+    if (e === 7) mnote(MIDI(bar.bass[0] + 12), t, BEAT * 0.4, "triangle", 0.25, 600);
+    if (e === 2 || e === 6) bar.chord.forEach(n => mnote(MIDI(n), t, BEAT * 0.35, "square", 0.035, 1800));
+    noise(t - ctx.currentTime, 0.04, { vol: e % 2 ? 0.05 : 0.09, hp: 7000, dest: musicBus });
+    if (music.round % 2 === 1) { // la mélodie un tour sur deux
+      const m = MELODY.find(([b, s]) => b === Math.floor(i / 8) % 4 && s === e);
+      if (m) { mnote(MIDI(m[2]), t, BEAT * 0.5, "sine", 0.22); mnote(MIDI(m[2] + 12), t, BEAT * 0.25, "sine", 0.05); }
+    }
+  }
+  function tickMusic() {
+    if (!ctx || !music.on) return;
+    while (music.next < ctx.currentTime + 0.25) {
+      if (!muted) scheduleStep(music.step, music.next);
+      music.step++;
+      if (music.step % 32 === 0) music.round++;
+      music.next += BEAT / 2;
+    }
+  }
+  function musicLevel() {
+    if (!ctx || !musicBus) return;
+    const target = music.on && !muted && !music.duck ? 0.32 : 0.0001;
+    musicBus.gain.cancelScheduledValues(ctx.currentTime);
+    musicBus.gain.setTargetAtTime(target, ctx.currentTime, music.on && !music.duck ? 0.4 : 0.12);
+  }
+  const musicApi = {
+    start() {
+      if (music.on) return;
+      const c = audio(); if (!c) return;
+      music.on = true; music.step = 0; music.round = 0; music.next = c.currentTime + 0.1;
+      music.timer = setInterval(tickMusic, 80);
+      tickMusic(); musicLevel();
+    },
+    stop() {
+      if (!music.on) return;
+      music.on = false; clearInterval(music.timer);
+      musicLevel();
+    },
+    // Baisse la musique pendant un son ou une vidéo (blind test, récompense)
+    duck(on) { music.duck = !!on; musicLevel(); },
+    get playing() { return music.on; },
+  };
+
   window.FX = {
     sound,
+    music: musicApi,
     confetti, confettiFrom,
     reduceMotion,
     get muted() { return muted; },
-    set muted(v) { muted = !!v; try { localStorage.setItem("qpuc-muted", muted ? "1" : "0"); } catch {} },
+    set muted(v) { muted = !!v; try { localStorage.setItem("qpuc-muted", muted ? "1" : "0"); } catch {} musicLevel(); },
   };
 })();
