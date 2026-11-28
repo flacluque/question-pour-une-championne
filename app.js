@@ -64,7 +64,7 @@
     return { kind, question: "", answers: ["", "", "", ""], correct: 0, tf: 0,
       slider: { min: "0", max: "100", step: "1", unit: "", answer: "", tol: "0" },
       order: ["", "", "", ""], accepted: "", blindMode: "choice", promptPath: null, effect: "blur", focus: { x: 50, y: 45 },
-      photoPath: null, photoCaption: "" };
+      photoPath: null, photoCaption: "", destroy: null };
   }
   const uid = () => state.session && state.session.user ? state.session.user.id : null;
   const currentQuiz = () => state.quizzes.find(q => q.id === state.quizId) || null;
@@ -630,6 +630,7 @@
   function startQuiz() {
     FX.sound.whoosh();
     state.mode = "quiz"; state.idx = 0; state.picked = null; state.results = []; state.log = []; state.fresh = false;
+    state.destroyed = {}; state.destructAt = null;
     state.saved = false;
     // Ordre des réponses mélangé à chaque partie (la bonne n'est jamais au même endroit)
     state.orders = state.questions.map(q => {
@@ -860,6 +861,139 @@
       answered ? null : el("button", { type: "submit", class: "validate", text: "Valider" }));
   }
 
+  // ---------- 💣 autodestruction de la récompense ----------
+  const BOOM_LINES = ["Fallait regarder plus vite 😈", "Mission accomplie.", "Trop tard pour la capture d'écran", "Pouf. Plus rien.", "C'était le seul exemplaire"];
+  function destroyedPlaceholder(line) {
+    return el("figure", { class: "photo destroyed" },
+      el("span", { class: "scorch-smoke", "aria-hidden": "true" }, el("i"), el("i"), el("i")),
+      el("span", { class: "scorch-emoji", "aria-hidden": "true", text: "💥" }),
+      el("figcaption", {}, el("strong", { text: "Autodétruit" }), el("span", { text: line })));
+  }
+  function armDestruct(fig, q) {
+    if (!fig.isConnected) return;
+    const d = qData(q), idx = state.idx;
+    const m = fig.querySelector("img, video");
+    const badge = el("span", { class: "bomb-badge", "aria-live": "polite" });
+    fig.append(badge);
+    fig.classList.add("armed");
+    let stopped = false, timer = 0, lastShown = null;
+    onLeave(() => { stopped = true; clearTimeout(timer); });
+    const tickTo = remaining => {
+      const n = Math.ceil(remaining);
+      if (n !== lastShown) {
+        lastShown = n;
+        badge.textContent = "💣 Autodestruction dans " + n;
+        fig.classList.toggle("danger", n <= 3);
+        if (n <= 3) { FX.sound.beep(n); fig.classList.remove("shake-" + (n + 1)); fig.classList.add("shake-" + n); }
+        else if (n <= 5) FX.sound.beep(9);
+      }
+    };
+    const go = () => { if (!stopped && fig.isConnected) explode(fig, idx); };
+    if (d.destroy === "end" && m && m.tagName === "VIDEO") {
+      badge.textContent = "💣 S'autodétruit à la fin de la vidéo";
+      m.loop = false;
+      m.addEventListener("timeupdate", () => { if (!stopped && m.duration && m.duration - m.currentTime <= 3.2) tickTo(m.duration - m.currentTime); });
+      m.addEventListener("ended", go);
+      return;
+    }
+    const loop = () => {
+      if (stopped || !fig.isConnected) return;
+      const left = ((state.destructAt || performance.now()) - performance.now()) / 1000;
+      if (left <= 0) return go();
+      tickTo(left);
+      timer = setTimeout(loop, 100);
+    };
+    loop();
+  }
+  // Boum : la photo (ou l'image en cours de la vidéo) vole en éclats, flash, fumée, l'écran tremble
+  function explode(fig, idx) {
+    const m = fig.querySelector("img, video");
+    const line = pickOne(BOOM_LINES);
+    (state.destroyed = state.destroyed || {})[idx] = line;
+    const r = (m || fig).getBoundingClientRect();
+    if (m && m.tagName === "VIDEO") { try { m.pause(); } catch {} }
+    FX.sound.boom();
+    if (navigator.vibrate) try { navigator.vibrate([60, 30, 120]); } catch {}
+    // Éclats
+    if (m && r.width && !FX.reduceMotion()) shatter(m, r);
+    // Flash et fumée
+    const fx = el("div", { class: "boom-fx", "aria-hidden": "true" });
+    Object.assign(fx.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
+    fx.append(el("span", { class: "boom-flash" }));
+    for (let i = 0; i < 9; i++) {
+      const p = el("span", { class: "boom-smoke" });
+      p.style.setProperty("--x", (Math.random() * 100) + "%");
+      p.style.setProperty("--y", (30 + Math.random() * 60) + "%");
+      p.style.setProperty("--d", (Math.random() * 0.25) + "s");
+      p.style.setProperty("--s", (0.6 + Math.random() * 0.9).toFixed(2));
+      fx.append(p);
+    }
+    document.body.append(fx);
+    setTimeout(() => fx.remove(), 2200);
+    // L'emplacement devient une zone calcinée
+    const ph = destroyedPlaceholder(line);
+    ph.style.minHeight = Math.max(160, Math.min(r.height, 320)) + "px";
+    ph.style.width = "min(100%, " + Math.max(260, Math.round(r.width)) + "px)";
+    fig.replaceWith(ph);
+    const card = view.querySelector(":scope > .card");
+    if (card && card.animate && !FX.reduceMotion()) card.animate([
+      { transform: "translate(0, 0)" }, { transform: "translate(-9px, 5px) rotate(-.6deg)" }, { transform: "translate(8px, -6px) rotate(.5deg)" },
+      { transform: "translate(-6px, 3px)" }, { transform: "translate(4px, -2px)" }, { transform: "translate(0, 0)" }], { duration: 450, easing: "ease-out" });
+  }
+  function shatter(src, r) {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    const cv = document.createElement("canvas");
+    cv.className = "shards";
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+    document.body.append(cv);
+    const ctx = cv.getContext("2d");
+    ctx.scale(dpr, dpr);
+    // Ce qu'on voit de la photo : on tient compte du recadrage « cover » éventuel
+    const nw = src.naturalWidth || src.videoWidth || r.width, nh = src.naturalHeight || src.videoHeight || r.height;
+    const fit = getComputedStyle(src).objectFit;
+    let sx = 0, sy = 0, sw = nw, sh = nh;
+    if (fit === "cover") { const k = Math.max(r.width / nw, r.height / nh); sw = r.width / k; sh = r.height / k; sx = (nw - sw) / 2; sy = (nh - sh) / 2; }
+    // Grille déformée → triangles
+    const cols = 7, rows = 6, pts = [];
+    for (let j = 0; j <= rows; j++) for (let i = 0; i <= cols; i++) {
+      const edge = i === 0 || j === 0 || i === cols || j === rows;
+      pts.push([r.left + r.width * (i + (edge ? 0 : (Math.random() - 0.5) * 0.7)) / cols, r.top + r.height * (j + (edge ? 0 : (Math.random() - 0.5) * 0.7)) / rows]);
+    }
+    const P = (i, j) => pts[j * (cols + 1) + i];
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const shards = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+      const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
+      for (const tri of (Math.random() < 0.5 ? [[a, b, c], [a, c, d]] : [[a, b, d], [b, c, d]])) {
+        const mx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3, my = (tri[0][1] + tri[1][1] + tri[2][1]) / 3;
+        const ang = Math.atan2(my - cy, mx - cx), dist = Math.hypot(mx - cx, my - cy) / Math.max(r.width, r.height);
+        const sp = 380 + Math.random() * 520 + dist * 300;
+        shards.push({ tri, mx, my, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 260 - Math.random() * 200,
+          rot: 0, vr: (Math.random() - 0.5) * 14, x: 0, y: 0 });
+      }
+    }
+    const t0 = performance.now(), DUR = 1500;
+    const step = now => {
+      const t = Math.min(DUR, now - t0) / 1000, dt = 1 / 60;
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      const fade = Math.max(0, 1 - Math.max(0, t - 0.9) / 0.6);
+      for (const s of shards) {
+        s.vy += 1500 * dt; s.x += s.vx * dt; s.y += s.vy * dt; s.rot += s.vr * dt; s.vx *= 0.99;
+        ctx.save();
+        ctx.globalAlpha = fade;
+        ctx.translate(s.mx + s.x, s.my + s.y); ctx.rotate(s.rot); ctx.translate(-s.mx, -s.my);
+        ctx.beginPath(); ctx.moveTo(s.tri[0][0], s.tri[0][1]); ctx.lineTo(s.tri[1][0], s.tri[1][1]); ctx.lineTo(s.tri[2][0], s.tri[2][1]); ctx.closePath();
+        ctx.save(); ctx.clip();
+        try { ctx.drawImage(src, sx, sy, sw, sh, r.left, r.top, r.width, r.height); } catch { ctx.fillStyle = "#555"; ctx.fill(); }
+        ctx.restore();
+        ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+      }
+      if (now - t0 < DUR) requestAnimationFrame(step); else cv.remove();
+    };
+    requestAnimationFrame(step);
+  }
+
   function renderReveal(q, k, good) {
     const o = state.outcome;
     const d = qData(q);
@@ -867,11 +1001,15 @@
       el("p", { class: "verdict", text: good ? (k === "slider" && o.value !== num(d.answer) ? "Bien vu !" : "Bonne réponse !") : "Raté…" }));
     if (good && o.secs) reveal.append(el("p", { class: "blind-found", text: o.secs === BLIND_LEVELS[0] ? "Trouvé en " + plural(o.secs, "seconde", "secondes") + ", chapeau !" : "Trouvé avec l'extrait de " + o.secs + " secondes." }));
     if (q.photo_path) {
-      if (good) {
-        reveal.append(el("figure", { class: "photo develop" },
+      if (good && state.destroyed && state.destroyed[state.idx]) {
+        reveal.append(destroyedPlaceholder(state.destroyed[state.idx]));
+      } else if (good) {
+        const fig = el("figure", { class: "photo develop" },
           media(q.photo_path, { alt: q.photo_caption || "Photo", play: true }),
-          el("span", { class: "shine", "aria-hidden": "true" })));
+          el("span", { class: "shine", "aria-hidden": "true" }));
+        reveal.append(fig);
         if (q.photo_caption) reveal.append(el("p", { class: "photo-caption", text: q.photo_caption }));
+        if (d.destroy != null) setTimeout(() => armDestruct(fig, q), 0);
       } else {
         reveal.append(el("figure", { class: "photo locked" },
           media(q.photo_path, { preview: true }),
@@ -935,6 +1073,8 @@
     const prompt = view.querySelector(".blind audio, .blind video");
     if (prompt && !prompt.paused) prompt.pause();
     CATS.react(good ? "good" : "bad");
+    const dq = qData(q).destroy;
+    state.destructAt = good && q.photo_path && dq != null && dq !== "end" ? performance.now() + 900 + Number(dq) * 1000 : null;
     if (good) {
       FX.sound.correct();
       FX.confettiFrom(view.querySelector(".answer.is-good, .slider-value, .order-list, .text-answer"), { count: 60 });
@@ -1250,7 +1390,7 @@
       list.append(el("div", { class: "qlist" }, state.questions.map((q, i) => el("div", { class: "qitem" },
         (q.photo_path || q.prompt_media) ? media(q.photo_path || q.prompt_media, { cls: "thumb", preview: true }) : el("div", { class: "thumb", text: "sans photo" }),
         el("div", { class: "meta" },
-          el("span", { class: "kind-tag", text: KINDS[kindOf(q)].label + (kindOf(q) === "blindtest" ? (answerKind(q) === "text" ? " · réponse libre" : " · choix") : "") }),
+          el("span", { class: "kind-tag", text: KINDS[kindOf(q)].label + (kindOf(q) === "blindtest" ? (answerKind(q) === "text" ? " · réponse libre" : " · choix") : "") + (qData(q).destroy != null ? " · 💣" : "") }),
           el("p", { class: "q", text: (i + 1) + ". " + q.question }),
           el("p", { class: "a", text: "✓ " + correctText(q) + (kindOf(q) === "slider" && num(qData(q).tol) ? " (±" + withUnit(num(qData(q).tol), qData(q).unit) + ")" : "") })),
         el("div", { class: "acts" },
@@ -1387,6 +1527,7 @@
     if (k === "order") f.order = a.slice();
     if (ak === "text") f.accepted = a.join("\n");
     if (k === "mystery") { f.effect = d.effect || "blur"; f.focus = { x: d.focus_x ?? 50, y: d.focus_y ?? 45 }; }
+    f.destroy = d.destroy ?? null;
     state.editingId = q.id;
     state.form = f;
     render();
@@ -1438,6 +1579,8 @@
       if (!f.promptPath || !(isAudio(f.promptPath) || isVideo(f.promptPath))) return { error: "Ajoute le son (ou la vidéo) à reconnaître." };
       row.prompt_media = f.promptPath;
     }
+    // Autodestruction de la récompense (dans les réglages de la question)
+    if (row.photo_path && f.destroy != null && (f.destroy !== "end" || isVideo(row.photo_path))) row.data = { ...row.data, destroy: f.destroy };
     return { row };
   }
 
@@ -1617,7 +1760,19 @@
         f.photoPath ? el("button", { type: "button", class: "link", onclick: () => { f.photoPath = null; render(); }, text: "Retirer" }) : null),
       f.photoPath ? el("label", { for: "f-caption" }, "Description ", el("span", { class: "hint", text: "(facultatif)" }),
         el("textarea", { id: "f-caption", class: "caption-input", maxlength: "300", placeholder: "Ex : Notre premier week-end à la montagne, juillet 2024",
-          value: f.photoCaption, oninput: e => (f.photoCaption = e.target.value) })) : null);
+          value: f.photoCaption, oninput: e => (f.photoCaption = e.target.value) })) : null,
+      f.photoPath ? renderDestroyField(f) : null);
+  }
+
+  // 💣 La récompense peut s'autodétruire : après quelques secondes, ou à la fin de la vidéo
+  function renderDestroyField(f) {
+    const opts = [[null, "Non"], [5, "Après 5 s"], [10, "Après 10 s"], [20, "Après 20 s"]];
+    if (isVideo(f.photoPath)) opts.push(["end", "À la fin de la vidéo"]);
+    if (f.destroy === "end" && !isVideo(f.photoPath)) f.destroy = null;
+    return el("div", { class: "stack" },
+      el("span", { class: "label" }, "💣 Autodestruction ", el("span", { class: "hint", text: "(la photo ou la vidéo explose : on ne la voit qu'une fois)" })),
+      el("div", { class: "who" }, opts.map(([v, t]) =>
+        el("label", {}, el("input", { type: "radio", name: "f-destroy", id: "f-destroy-" + (v ?? "non"), checked: f.destroy === v, onchange: () => (f.destroy = v) }), t))));
   }
 
   async function uploadMedia(file, field) {

@@ -151,6 +151,20 @@
         nodes.forEach(n => { try { n.stop(t + 0.35); } catch {} });
       };
     },
+    // Bip du compte à rebours : plus aigu et plus pressant à 3, 2, 1
+    beep(n = 9) {
+      const f = n <= 1 ? 1760 : n <= 2 ? 1480 : n <= 3 ? 1320 : 990;
+      note(f, 0, 0.09, { type: "square", vol: n <= 3 ? 0.14 : 0.07, filter: 4000 });
+      if (n <= 2) note(f, 0.16, 0.07, { type: "square", vol: 0.1, filter: 4000 });
+    },
+    // Explosion : souffle de bruit qui s'éteint, coup sourd très grave, quelques crépitements
+    boom() {
+      noise(0, 1.3, { vol: 0.55, hp: 40, lp: 2600 });
+      noise(0, 0.25, { vol: 0.35, hp: 1500 });
+      note(90, 0, 0.7, { type: "sine", vol: 0.6, to: 28 });
+      note(55, 0.02, 0.9, { type: "triangle", vol: 0.35, to: 25 });
+      for (let i = 0; i < 6; i++) noise(0.25 + Math.random() * 0.7, 0.04, { vol: 0.12, hp: 2500 });
+    },
     crash() {
       noise(0, 1.4, { vol: 0.22, hp: 4500 });
       note(110, 0, 0.35, { type: "sine", vol: 0.35, to: 45 });
