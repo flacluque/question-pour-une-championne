@@ -706,3 +706,4 @@ body.splash-landed .duo-vs { animation: stamp .45s cubic-bezier(.2, 1.6, .4, 1) 
 .zoom-cover { position: fixed; z-index: 40; background: var(--surface); border: 1px solid var(--line); pointer-events: none; }
 .zoom-head { position: fixed; z-index: 41; pointer-events: none; transform-origin: center; filter: drop-shadow(0 10px 18px rgba(20, 26, 40, .3)); }
 body.zoom-flying .q-head .host .head { visibility: hidden; }
+.diab-gl { display: block; }

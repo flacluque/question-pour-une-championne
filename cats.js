@@ -15,6 +15,7 @@
   let chase = null, nextChase = now() + rand(30000, 50000);
 
   function meow(c, force = false) {
+    if (calm) return; // pas de miaou pendant les questions
     if (!force && now() - lastMeow < 1400) return;
     lastMeow = now();
     FX.sound.meow(c.p.pitch || 1, c.p.sound);
@@ -219,7 +220,7 @@
       });
     });
     meow(a, true);
-    setTimeout(() => FX.sound.meow((b.p.pitch || 1) * 1.05), 350);
+    setTimeout(() => { if (!calm) FX.sound.meow((b.p.pitch || 1) * 1.05); }, 350);
     FX.confetti(mx + a.s / 2, my + a.s / 2, { count: 30, spread: 1.6, power: 0.6 });
   }
   function steer(c, tx, ty, speed, dt) {
