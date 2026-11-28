@@ -16,7 +16,7 @@
   function meow(c, force = false) {
     if (!force && now() - lastMeow < 1400) return;
     lastMeow = now();
-    FX.sound.meow(c.p.pitch || 1);
+    FX.sound.meow(c.p.pitch || 1, c.p.sound);
   }
   function play(c, cls) {
     c.img.classList.remove(cls); void c.img.offsetWidth; c.img.classList.add(cls);
