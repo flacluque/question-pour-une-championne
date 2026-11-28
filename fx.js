@@ -79,25 +79,70 @@
         noise(i / 22, 0.07, { vol: 0.05 + 0.2 * k * k, hp: 900, lp: 5200 });
       }
     },
-    // Miaou synthétisé : une voyelle qui glisse « mi-a-ou » (pitch > 1 = plus aigu)
+    // Miaou synthétisé, construit comme une voix : une note qui monte puis retombe (« mi-aaa-ou »),
+    // filtrée par des formants qui glissent de « i » à « a » à « ou », avec la bouche qui s'ouvre puis se ferme.
     meow(pitch = 1) {
       const c = audio(); if (!c || muted) return;
-      const t0 = c.currentTime, d = 0.55;
-      const osc = c.createOscillator(), bp = c.createBiquadFilter(), g = c.createGain();
+      const t0 = c.currentTime + 0.01;
+      const d = 0.62 * (0.88 + Math.random() * 0.24);
+      const p = pitch * (0.94 + Math.random() * 0.12);
+      const at = k => t0 + d * k;
+
+      // Voix : dent de scie + léger vibrato
+      const osc = c.createOscillator();
       osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(430 * pitch, t0);
-      osc.frequency.linearRampToValueAtTime(760 * pitch, t0 + 0.14);
-      osc.frequency.linearRampToValueAtTime(520 * pitch, t0 + d);
-      bp.type = "bandpass"; bp.Q.value = 4;
-      bp.frequency.setValueAtTime(900, t0);
-      bp.frequency.linearRampToValueAtTime(2100, t0 + 0.16);
-      bp.frequency.linearRampToValueAtTime(800, t0 + d);
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.06);
-      g.gain.setValueAtTime(0.42, t0 + 0.3);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
-      osc.connect(bp); bp.connect(g); g.connect(master);
-      osc.start(t0); osc.stop(t0 + d + 0.05);
+      osc.frequency.setValueAtTime(520 * p, t0);
+      osc.frequency.linearRampToValueAtTime(690 * p, at(0.18));
+      osc.frequency.linearRampToValueAtTime(760 * p, at(0.38));
+      osc.frequency.exponentialRampToValueAtTime(470 * p, at(0.92));
+      osc.frequency.linearRampToValueAtTime(420 * p, at(1));
+      const vib = c.createOscillator(), vibAmt = c.createGain();
+      vib.frequency.value = 6.5; vibAmt.gain.value = 9 * p;
+      vib.connect(vibAmt); vibAmt.connect(osc.frequency);
+
+      // Souffle : un peu de bruit filtré, mélangé à la voix
+      if (!noiseBuf) {
+        noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+        const nd = noiseBuf.getChannelData(0);
+        for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+      }
+      const breath = c.createBufferSource(); breath.buffer = noiseBuf;
+      const breathGain = c.createGain(); breathGain.gain.value = 0.06;
+      breath.connect(breathGain);
+
+      // Bouche : passe-bas fermé (« m »), qui s'ouvre, puis se referme (« ou »)
+      const mouth = c.createBiquadFilter();
+      mouth.type = "lowpass"; mouth.Q.value = 0.7;
+      mouth.frequency.setValueAtTime(500, t0);
+      mouth.frequency.exponentialRampToValueAtTime(4200, at(0.14));
+      mouth.frequency.setValueAtTime(4200, at(0.55));
+      mouth.frequency.exponentialRampToValueAtTime(900, at(1));
+      osc.connect(mouth); breathGain.connect(mouth);
+
+      // Formants « i » → « a » → « ou »
+      const out = c.createGain();
+      const formant = (pts, q, vol) => {
+        const f = c.createBiquadFilter(); f.type = "bandpass"; f.Q.value = q;
+        f.frequency.setValueAtTime(pts[0], t0);
+        f.frequency.linearRampToValueAtTime(pts[1], at(0.3));
+        f.frequency.linearRampToValueAtTime(pts[2], at(0.62));
+        f.frequency.linearRampToValueAtTime(pts[3], at(1));
+        const g = c.createGain(); g.gain.value = vol;
+        mouth.connect(f); f.connect(g); g.connect(out);
+      };
+      formant([420 * p, 950 * p, 820 * p, 480 * p], 5, 1.0);     // F1
+      formant([2300 * p, 1700 * p, 1250 * p, 850 * p], 7, 0.75); // F2
+      formant([3100, 2800, 2600, 2400], 9, 0.25);                 // F3
+
+      // Enveloppe : attaque douce, tenue, chute à la fin
+      const env = c.createGain();
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.exponentialRampToValueAtTime(1.2, at(0.12));
+      env.gain.linearRampToValueAtTime(1.0, at(0.6));
+      env.gain.exponentialRampToValueAtTime(0.0001, at(1));
+      out.connect(env); env.connect(master);
+
+      [osc, vib, breath].forEach(n => { n.start(t0); n.stop(at(1) + 0.05); });
     },
     crash() {
       noise(0, 1.4, { vol: 0.22, hp: 4500 });
