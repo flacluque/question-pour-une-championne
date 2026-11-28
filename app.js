@@ -290,66 +290,80 @@
     return box;
   }
 
-  // Entrée dans un quiz : la carte grandit jusqu'à remplir l'écran, la tête de l'auteur s'envole
-  // puis traverse l'écran pour aller se placer en présentateur
+  // Entrée dans un quiz : la tête du présentateur jaillit de la carte, devient énorme au milieu de l'écran
+  // et lance « C'est parti ! », puis rétrécit et file se poser à sa place sur la page du quiz.
   let zooming = false;
   function zoomIntoQuiz(q, card) {
     if (zooming) return;
-    if (FX.reduceMotion() || !card || !card.animate) return openQuiz(q.id);
+    const host = hostFor(q);
+    if (FX.reduceMotion() || !card || !card.animate || !host || !host.head) return openQuiz(q.id);
     zooming = true;
-    const r = card.getBoundingClientRect();
-    const radius = getComputedStyle(card).borderRadius;
-    const cover = el("div", { class: "zoom-cover", "aria-hidden": "true" });
-    Object.assign(cover.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", borderRadius: radius });
-    document.body.append(cover);
-    const head = card.querySelector(".card-head");
-    let flyer = null, hr = null;
-    if (head) {
-      hr = head.getBoundingClientRect();
-      flyer = head.cloneNode(true);
-      flyer.className = "zoom-head";
-      Object.assign(flyer.style, { left: hr.left + "px", top: hr.top + "px", width: hr.width + "px", height: hr.height + "px" });
-      document.body.append(flyer);
-      head.style.visibility = "hidden";
-    }
+    const src = card.querySelector(".card-head");
+    const sr = (src || card).getBoundingClientRect();
+    const big = Math.min(innerWidth * 0.96, innerHeight * 0.62, 640);
+    const cx = innerWidth / 2, cy = innerHeight * 0.58;
+
+    const backdrop = el("div", { class: "go-backdrop" });
+    const fly = el("div", { class: "go-fly" }, headImg(host, "go-head"));
+    const say = el("div", { class: "go-say", text: "C'est parti !" });
+    const stage = el("div", { class: "go-stage", "aria-hidden": "true" }, backdrop, fly, say);
+    Object.assign(fly.style, { width: big + "px", height: big + "px", left: cx - big / 2 + "px", top: cy - big / 2 + "px" });
+    say.style.top = cy - big / 2 + "px";
+    document.body.append(stage);
+    if (src) src.style.visibility = "hidden";
+
+    // 1. Elle jaillit de la carte en tournant et grossit jusqu'à remplir l'écran
+    const s0 = (src ? sr.width : 48) / big;
+    const dx0 = sr.left + sr.width / 2 - cx, dy0 = sr.top + sr.height / 2 - cy;
     FX.sound.whoosh();
-    const ease = "cubic-bezier(.6, 0, .2, 1)";
-    const grow = cover.animate([
-      { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", borderRadius: radius },
-      { left: "0px", top: "0px", width: innerWidth + "px", height: innerHeight + "px", borderRadius: "0px" },
-    ], { duration: 450, easing: ease, fill: "forwards" });
-    // La tête s'envole au centre de l'écran en tournant
-    let lift = null;
-    if (flyer) {
-      const cx = innerWidth / 2 - (hr.left + hr.width / 2), cy = innerHeight * 0.4 - (hr.top + hr.height / 2);
-      lift = `translate(${cx}px, ${cy}px) scale(2.2) rotate(360deg)`;
-      flyer.animate([{ transform: "none" }, { transform: lift }], { duration: 450, easing: "cubic-bezier(.3, .9, .3, 1.15)", fill: "forwards" });
-    }
-    grow.finished.then(() => {
-      openQuiz(q.id);
-      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 380, easing: "ease-out", fill: "forwards" }).finished.then(() => cover.remove());
-      const target = view.querySelector(".q-head .host .head");
-      if (!flyer) { zooming = false; return; }
-      if (!target) { flyer.remove(); zooming = false; return; }
-      // Pendant le vol, la vraie tête reste cachée (même si la page se redessine entre-temps)
+    backdrop.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: "ease-out", fill: "forwards" });
+    fly.animate([
+      { transform: `translate(${dx0}px, ${dy0}px) scale(${s0}) rotate(-25deg)` },
+      { transform: "translate(0, -3%) scale(1.1) rotate(8deg)", offset: 0.72 },
+      { transform: "translate(0, 0) scale(.97) rotate(-2deg)", offset: 0.88 },
+      { transform: "none" },
+    ], { duration: 700, easing: "cubic-bezier(.2, .8, .3, 1)", fill: "forwards" });
+    const timers = [
+      setTimeout(() => { FX.sound.boing(); fly.classList.add("talking"); }, 620),
+      setTimeout(() => { say.classList.add("show"); FX.sound.correct(); }, 700),
+      setTimeout(leave, 2100),
+    ];
+    stage.addEventListener("pointerdown", leave);
+
+    // 2. Elle rétrécit et file se poser à sa place de présentateur, pendant que la page du quiz apparaît
+    let left = false;
+    function leave() {
+      if (left) return;
+      left = true;
+      timers.forEach(clearTimeout);
+      if (src) src.style.visibility = "";
       document.body.classList.add("zoom-flying");
-      FX.sound.boing();
-      const t = target.getBoundingClientRect();
-      const s = t.width / hr.width;
-      const dx = t.left + t.width / 2 - (hr.left + hr.width / 2), dy = t.top + t.height / 2 - (hr.top + hr.height / 2);
-      const mx = (dx + innerWidth / 2 - (hr.left + hr.width / 2)) / 2;
-      flyer.animate([
-        { transform: lift },
-        { transform: `translate(${mx}px, ${Math.min(dy, innerHeight * 0.4 - (hr.top + hr.height / 2)) - 90}px) scale(${(2.2 + s) / 2}) rotate(540deg)`, offset: 0.5 },
-        { transform: `translate(${dx}px, ${dy}px) scale(${s}) rotate(720deg)` },
-      ], { duration: 650, easing: "cubic-bezier(.45, 0, .25, 1)", fill: "forwards" }).finished.then(() => {
+      openQuiz(q.id);
+      fly.classList.remove("talking");
+      say.animate([{ opacity: 1, transform: "translate(-50%, -100%) scale(1)" }, { opacity: 0, transform: "translate(-50%, -100%) scale(.6)" }],
+        { duration: 200, easing: "ease-in", fill: "forwards" });
+      backdrop.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 550, easing: "ease-in-out", fill: "forwards" });
+      const target = view.querySelector(".q-head .host .head");
+      const done = () => {
+        stage.remove();
         document.body.classList.remove("zoom-flying");
-        flyer.remove();
         zooming = false;
-        const host = view.querySelector(".q-head .host");
-        if (host) { host.classList.remove("host-hello"); void host.offsetWidth; host.classList.add("host-hello"); }
-      });
-    }, () => { cover.remove(); flyer?.remove(); zooming = false; openQuiz(q.id); });
+        const h = view.querySelector(".q-head .host");
+        if (h) { h.classList.remove("host-hello"); void h.offsetWidth; h.classList.add("host-hello"); }
+      };
+      if (!target) {
+        fly.animate([{ opacity: 1 }, { opacity: 0, transform: "scale(.6)" }], { duration: 400, fill: "forwards" }).finished.then(done, done);
+        return;
+      }
+      FX.sound.whoosh();
+      const t = target.getBoundingClientRect();
+      const dx = t.left + t.width / 2 - cx, dy = t.top + t.height / 2 - cy, s = t.width / big;
+      fly.animate([
+        { transform: "none" },
+        { transform: `translate(${dx * 0.35}px, ${dy * 0.35 - 40}px) scale(${(1 + s) / 2 + 0.1}) rotate(-12deg)`, offset: 0.35 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${s}) rotate(360deg)` },
+      ], { duration: 650, easing: "cubic-bezier(.5, 0, .2, 1)", fill: "forwards" }).finished.then(done, done);
+    }
   }
 
   // Les deux têtes qui arrivent des côtés, se cognent, puis flottent. Un clic les fait parler.
