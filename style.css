@@ -670,11 +670,39 @@ body.splash-landed .duo-vs { animation: stamp .45s cubic-bezier(.2, 1.6, .4, 1) 
 
 /* Les chats qui traversent l'ouverture */
 .splash-stage { position: relative; z-index: 1; }
-.splash-cat { position: absolute; left: 0; bottom: 15vh; width: clamp(64px, 15vw, 104px); z-index: 0; animation: cat-run 1.7s linear both; }
-.splash-cat-0 { animation-delay: 1.25s; }
-.splash-cat-1 { animation-delay: 1.65s; bottom: 11vh; }
-.splash-cat-hop { display: block; animation: cat-hop .28s ease-in-out infinite alternate; }
+.splash-cat { position: absolute; left: 0; bottom: 15vh; width: clamp(64px, 15vw, 104px); z-index: 0; animation: cat-run 3.2s linear both; }
+.splash-cat-0 { animation-delay: .9s; }
+.splash-cat-1 { animation-delay: 1.35s; bottom: 11vh; }
+.splash-cat-hop { display: block; animation: cat-hop .36s ease-in-out infinite alternate; }
 .splash-cat img { display: block; width: 100%; filter: drop-shadow(0 6px 10px rgba(20, 26, 40, .25)); }
 @keyframes cat-run { from { transform: translateX(-30vw); } to { transform: translateX(130vw); } }
 @keyframes cat-hop { from { transform: translateY(0) rotate(-6deg); } to { transform: translateY(-16px) rotate(6deg); } }
 @media (prefers-reduced-motion: reduce) { .pets, .splash-cat { display: none; } }
+
+/* ---------- Diablotins du fond qui prennent vie ---------- */
+.diabs { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.diab { position: absolute; left: 0; top: 0; will-change: transform; }
+.diab-img { display: block; transform-origin: 50% 70%; filter: drop-shadow(0 8px 14px rgba(20, 26, 40, .3)); }
+.diab-say {
+  position: absolute; left: 50%; top: -6px; translate: -50% -100%; white-space: nowrap;
+  background: var(--fg); color: var(--bg); font-weight: 800; font-size: .85rem; padding: 5px 10px; border-radius: 10px;
+  animation: diab-say 2.4s ease both;
+}
+@keyframes diab-say { 0%, 18% { opacity: 0; transform: scale(.5) translateY(8px); } 28%, 78% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .diabs { display: none; } }
+
+/* Chats : ronron, câlin après la poursuite */
+.pet.purring .pet-img { animation: purr-vibe .12s linear infinite; }
+.pet.rolling .pet-img { animation: roll 1.5s ease-in-out; }
+@keyframes purr-vibe { 0%, 100% { transform: translate(0, 0) scale(1.03); } 25% { transform: translate(.8px, -.6px) scale(1.03); } 75% { transform: translate(-.8px, .6px) scale(1.03); } }
+@keyframes roll { 0% { transform: none; } 20% { transform: rotate(-25deg) scale(.95); } 50% { transform: rotate(200deg) scale(.9, 1); } 80% { transform: rotate(350deg) scale(1.05); } 100% { transform: rotate(360deg); } }
+.pet-heart {
+  position: absolute; z-index: 1; pointer-events: none; font-weight: 800; font-size: 1.1rem; color: #ff5d73;
+  animation: heart-up 1.6s ease-out forwards;
+}
+@keyframes heart-up { 0% { opacity: 0; transform: translateY(0) scale(.6); } 15% { opacity: 1; } 100% { opacity: 0; transform: translateY(-60px) scale(1.15) rotate(-12deg); } }
+
+/* Entrée dans un quiz : la carte remplit l'écran, la tête s'envole */
+.zoom-cover { position: fixed; z-index: 40; background: var(--surface); border: 1px solid var(--line); pointer-events: none; }
+.zoom-head { position: fixed; z-index: 41; pointer-events: none; transform-origin: center; filter: drop-shadow(0 10px 18px rgba(20, 26, 40, .3)); }
+body.zoom-flying .q-head .host .head { visibility: hidden; }

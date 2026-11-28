@@ -12,6 +12,7 @@
   const sizeNow = () => (innerWidth < 520 ? 64 : 92);
 
   let layer = null, cats = [], raf = 0, last = 0, calm = false, started = false, lastMeow = 0;
+  let chase = null, nextChase = now() + rand(30000, 50000);
 
   function meow(c, force = false) {
     if (!force && now() - lastMeow < 1400) return;
@@ -85,8 +86,22 @@
 
   // Attraper, lancer, taper (5 tapes = message secret)
   function grab(c) {
-    let down = null, samples = [];
+    let down = null, samples = [], hoverTimer = 0;
+    // Souris posée sur le chat : il s'arrête, et ronronne au bout de 2 s
+    c.node.addEventListener("pointerenter", e => {
+      if (e.pointerType !== "mouse" || down || c.mode !== "wander" || isChasing(c)) return;
+      c.mode = "pet";
+      hoverTimer = setTimeout(() => startPurr(c), 2000);
+    });
+    c.node.addEventListener("pointerleave", e => {
+      if (e.pointerType !== "mouse" || down) return;
+      clearTimeout(hoverTimer);
+      if (c.purring) stopPurr(c);
+      if (c.mode === "pet") wander(c);
+    });
     c.node.addEventListener("pointerdown", e => {
+      clearTimeout(hoverTimer);
+      if (c.purring) stopPurr(c);
       if (c.mode === "tween" || c.mode === "hold") return;
       e.preventDefault();
       try { c.node.setPointerCapture(e.pointerId); } catch {}
@@ -94,10 +109,14 @@
       samples = [{ x: e.clientX, y: e.clientY, t: now() }];
       c.mode = "drag";
       c.node.classList.add("dragging");
+      endChaseFor(c);
+      // Doigt posé sans bouger pendant 2 s : ronron
+      down.hold = setTimeout(() => { if (down && !down.moved) { down.purr = true; startPurr(c); } }, 2000);
     });
     c.node.addEventListener("pointermove", e => {
       if (!down) return;
-      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) down.moved = true;
+      if (!down.purr && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; clearTimeout(down.hold); }
+      if (down.purr) return;
       c.x = e.clientX - down.ox; c.y = e.clientY - down.oy;
       samples.push({ x: e.clientX, y: e.clientY, t: now() });
       if (samples.length > 6) samples.shift();
@@ -106,6 +125,8 @@
       if (!down) return;
       c.node.classList.remove("dragging");
       const d = down; down = null;
+      clearTimeout(d.hold);
+      if (d.purr) { stopPurr(c); wander(c, rand(55, 85)); return; }
       if (!d.moved && now() - d.t < 350) { tap(c); return; }
       const a = samples[0], b = samples[samples.length - 1];
       const dt = Math.max(16, b.t - a.t) / 1000;
@@ -142,6 +163,70 @@
     tween(c, { r: 0 }, 300, () => hold(c, 2600, () => { b.classList.add("out"); setTimeout(() => b.remove(), 400); wander(c); }));
   }
 
+  // ---------- ronron ----------
+  function startPurr(c) {
+    if (c.purring) return;
+    c.purring = true;
+    c.mode = c.mode === "drag" ? "drag" : "pet";
+    c.node.classList.add("purring");
+    c.purrStop = FX.sound.purr(c.p.pitch || 1);
+    const heart = () => {
+      const h = document.createElement("span");
+      h.className = "pet-heart";
+      h.textContent = Math.random() < 0.7 ? "♥" : "rrr";
+      h.style.left = (c.x + c.s * (0.25 + Math.random() * 0.5)) + "px";
+      h.style.top = (c.y + c.s * 0.1) + "px";
+      layer.append(h);
+      setTimeout(() => h.remove(), 1600);
+    };
+    heart();
+    c.purrHearts = setInterval(heart, 650);
+  }
+  function stopPurr(c) {
+    if (!c.purring) return;
+    c.purring = false;
+    c.node.classList.remove("purring");
+    clearInterval(c.purrHearts);
+    if (c.purrStop) c.purrStop();
+    c.purrStop = null;
+  }
+
+  // ---------- Seven poursuit Blanche ----------
+  const isChasing = c => !!chase && (chase.hunter === c || chase.prey === c);
+  function endChaseFor(c) { if (isChasing(c)) endChase(); }
+  function endChase() { chase = null; nextChase = now() + rand(45000, 80000); }
+  function startChase() {
+    const hunter = cats.find(c => /seven/i.test(c.p.name || "")) || cats[1];
+    const prey = cats.find(c => c !== hunter);
+    if (!hunter || !prey || hunter.mode !== "wander" || prey.mode !== "wander") { nextChase = now() + 8000; return; }
+    chase = { hunter, prey, from: now(), until: now() + 8000 };
+    meow(prey, true);
+    play(prey, "startle");
+  }
+  // Attrapée ! Ils se roulent en boule une seconde, puis repartent chacun de leur côté
+  function cuddle(a, b) {
+    endChase();
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    [a, b].forEach((c, i) => {
+      c.vx = c.vy = 0;
+      tween(c, { x: mx + (i ? 1 : -1) * c.s * 0.22, y: my }, 260, () => {
+        c.node.classList.add("rolling");
+        hold(c, 1500, () => {
+          c.node.classList.remove("rolling");
+          c.vx = (i ? 1 : -1) * rand(160, 220); c.vy = rand(-120, 120); c.vr = (i ? 1 : -1) * 200;
+          wander(c);
+        });
+      });
+    });
+    meow(a, true);
+    setTimeout(() => FX.sound.meow((b.p.pitch || 1) * 1.05), 350);
+    FX.confetti(mx + a.s / 2, my + a.s / 2, { count: 30, spread: 1.6, power: 0.6 });
+  }
+  function steer(c, tx, ty, speed, dt) {
+    const k = Math.min(1, dt * 3.5);
+    c.vx += (tx * speed - c.vx) * k; c.vy += (ty * speed - c.vy) * k;
+  }
+
   // ---------- boucle ----------
   function step(t) {
     const dt = Math.min(0.05, (t - (last || t)) / 1000);
@@ -151,11 +236,18 @@
     for (const c of cats) {
       const s = c.s;
       if (c.mode === "wander") {
+        if (chase && (chase.hunter === c || chase.prey === c)) {
+          const o = chase.hunter === c ? chase.prey : chase.hunter;
+          let dx = (o.x - c.x), dy = (o.y - c.y); const d = Math.hypot(dx, dy) || 1; dx /= d; dy /= d;
+          if (chase.hunter === c) steer(c, dx, dy, 320, dt);
+          else steer(c, -dx * 0.8 - dy * 0.6, -dy * 0.8 + dx * 0.6, 250, dt); // fuit en tournant
+          c.vr = (c.vx > 0 ? 1 : -1) * 160;
+        }
         c.boost = 1 + (c.boost - 1) * Math.exp(-dt * 1.5);
         const f = dt * pace * c.boost;
         c.x += c.vx * f; c.y += c.vy * f; c.r += c.vr * f;
         // Après un lancer ou un sursaut, on ralentit jusqu'à la vitesse de balade
-        const sp = Math.hypot(c.vx, c.vy), cruise = c.zoomUntil > t ? 420 : 85;
+        const sp = Math.hypot(c.vx, c.vy), cruise = c.zoomUntil > t ? 420 : isChasing(c) ? 340 : 85;
         if (sp > cruise) { const k = Math.exp(-dt * (c.zoomUntil > t ? 0 : 1.2)); c.vx *= k; c.vy *= k; }
         else if (sp < 45) { const k = 45 / (sp || 1); c.vx *= k; c.vy *= k; }
         c.vr *= Math.exp(-dt * (c.zoomUntil > t ? 0 : 0.6));
@@ -166,7 +258,7 @@
         if (c.y < 0) { c.y = 0; c.vy = Math.abs(c.vy); hit = true; }
         if (c.y > H - s) { c.y = H - s; c.vy = -Math.abs(c.vy); hit = true; }
         if (hit) { c.vr = rand(-140, 140); play(c, "bonk"); }
-        if (t > c.nextPeek && !cats.some(o => o.peeking) && !calm) peek(c);
+        if (t > c.nextPeek && !cats.some(o => o.peeking) && !calm && !chase) peek(c);
       } else if (c.mode === "tween") {
         const w = c.tw, k = Math.min(1, (t - w.t0) / w.dur), e = ease(k);
         c.x = w.x0 + (w.x1 - w.x0) * e; c.y = w.y0 + (w.y1 - w.y0) * e; c.r = w.r0 + (w.r1 - w.r0) * e;
@@ -175,13 +267,17 @@
         if (t >= c.until && c.after) { const a = c.after; c.after = null; a(); }
       }
     }
-    // Chocs entre chats : ils repartent chacun de leur côté
+    if (chase && t > chase.until) endChase();
+    if (!chase && !calm && cats.length > 1 && t > nextChase && !cats.some(o => o.peeking)) startChase();
+    // Chocs entre chats : ils repartent chacun de leur côté (ou se roulent en boule si c'était la poursuite)
     for (let i = 0; i < cats.length; i++) for (let j = i + 1; j < cats.length; j++) {
       const a = cats[i], b = cats[j];
       if (a.mode !== "wander" || b.mode !== "wander") continue;
       const dx = (b.x + b.s / 2) - (a.x + a.s / 2), dy = (b.y + b.s / 2) - (a.y + a.s / 2);
       const d = Math.hypot(dx, dy) || 1, min = (a.s + b.s) * 0.42;
       if (d >= min) continue;
+      // La poursuite dure au moins 2,5 s avant qu'il puisse l'attraper (sinon elle lui échappe en rebondissant)
+      if (chase && t - chase.from > 2500 && ((chase.hunter === a && chase.prey === b) || (chase.hunter === b && chase.prey === a))) { cuddle(a, b); continue; }
       const nx = dx / d, ny = dy / d;
       const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
       if (rel > 0) { a.vx -= rel * nx; a.vy -= rel * ny; b.vx += rel * nx; b.vy += rel * ny; }
@@ -198,6 +294,7 @@
   // ---------- réactions au jeu ----------
   function react(kind) {
     if (!started) return;
+    if (kind !== "good" && chase) endChase();
     const free = cats.filter(c => c.mode === "wander");
     if (kind === "good") {
       free.forEach((c, i) => setTimeout(() => { play(c, "hop"); c.vy -= 160; c.boost = 2; }, i * 120));
@@ -233,7 +330,8 @@
   window.CATS = {
     start,
     react,
-    calm(on) { calm = !!on; },
+    calm(on) { calm = !!on; if (calm && chase) endChase(); },
+    chase() { if (started && !calm) startChase(); }, // lance une poursuite tout de suite (pratique pour tester)
     pets,
   };
 })();

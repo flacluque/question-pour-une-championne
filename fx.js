@@ -109,6 +109,48 @@
     meow(pitch = 1, url = null) {
       playSample(url || MEOW_URL, pitch * (0.96 + Math.random() * 0.08), 1);
     },
+    // Ronron : bruit grave pulsé ~25 fois par seconde, avec la respiration (inspire / expire). Renvoie une fonction pour l'arrêter.
+    purr(pitch = 1) {
+      const c = audio(); if (!c || muted) return () => {};
+      if (!noiseBuf) {
+        noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+        const d = noiseBuf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      const t0 = c.currentTime;
+      const src = c.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const lp = c.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 320 * pitch; lp.Q.value = 1.2;
+      const lp2 = c.createBiquadFilter(); lp2.type = "lowpass"; lp2.frequency.value = 900 * pitch;
+      // Pulsations : un gain qui oscille entre 0 et 1, environ 25 Hz
+      const pulse = c.createGain(); pulse.gain.value = 0.5;
+      const lfo = c.createOscillator(); lfo.frequency.value = 24 * pitch;
+      const lfoAmt = c.createGain(); lfoAmt.gain.value = 0.5;
+      lfo.connect(lfoAmt); lfoAmt.connect(pulse.gain);
+      // Respiration : le ronron enfle et retombe toutes les ~1,6 s
+      const breath = c.createGain(); breath.gain.value = 0.75;
+      const blfo = c.createOscillator(); blfo.frequency.value = 0.62;
+      const bAmt = c.createGain(); bAmt.gain.value = 0.25;
+      blfo.connect(bAmt); bAmt.connect(breath.gain);
+      // Un peu de « corps » : une note très grave pulsée elle aussi
+      const body = c.createOscillator(); body.type = "triangle"; body.frequency.value = 48 * pitch;
+      const bodyGain = c.createGain(); bodyGain.gain.value = 0.35;
+      body.connect(bodyGain); bodyGain.connect(pulse);
+      const out = c.createGain();
+      out.gain.setValueAtTime(0.0001, t0);
+      out.gain.exponentialRampToValueAtTime(0.9, t0 + 0.35);
+      src.connect(lp); lp.connect(lp2); lp2.connect(pulse); pulse.connect(breath); breath.connect(out); out.connect(master);
+      const nodes = [src, lfo, blfo, body];
+      nodes.forEach(n => n.start(t0));
+      let stopped = false;
+      return () => {
+        if (stopped) return; stopped = true;
+        const t = c.currentTime;
+        out.gain.cancelScheduledValues(t);
+        out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), t);
+        out.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+        nodes.forEach(n => { try { n.stop(t + 0.35); } catch {} });
+      };
+    },
     crash() {
       noise(0, 1.4, { vol: 0.22, hp: 4500 });
       note(110, 0, 0.35, { type: "sine", vol: 0.35, to: 45 });

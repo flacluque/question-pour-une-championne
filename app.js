@@ -213,7 +213,7 @@
 
   async function boot() {
     render();
-    if (!playSplash()) CATS.start();
+    if (!playSplash()) { CATS.start(); DIABLOTINS.start(); }
     if (sb) {
       const { data } = await sb.auth.getSession();
       state.session = data.session;
@@ -250,6 +250,7 @@
     // Musique d'ambiance : seulement pendant les questions
     if (state.mode === "quiz") FX.music.start(); else FX.music.stop();
     CATS.calm(state.mode === "quiz");
+    DIABLOTINS.calm(state.mode === "quiz");
     view.replaceChildren();
     adminLink.hidden = ["admin", "adminQuiz", "login"].includes(state.mode);
     const fn = { home: renderHome, intro: renderIntro, quiz: renderQuiz, end: renderEnd, login: renderLogin, admin: renderAdmin, adminQuiz: renderAdminQuiz }[state.mode];
@@ -280,13 +281,75 @@
       return box;
     }
     box.append(el("div", { class: "quiz-grid" }, list.map(q =>
-      el("button", { type: "button", class: "quiz-card", onclick: () => { FX.sound.tick(); openQuiz(q.id); } },
+      el("button", { type: "button", class: "quiz-card", onclick: e => { FX.sound.tick(); zoomIntoQuiz(q, e.currentTarget); } },
         personFor(q) && personFor(q).head ? headImg(personFor(q), "card-head") : null,
         el("span", { class: "tag", text: plural(countOf(q), "question", "questions") + (personFor(q) ? " · par " + personFor(q).name : "") }),
         el("h3", { text: q.title }),
         q.description ? el("p", { text: q.description }) : null,
         el("span", { class: "go", text: "Jouer →" })))));
     return box;
+  }
+
+  // Entrée dans un quiz : la carte grandit jusqu'à remplir l'écran, la tête de l'auteur s'envole
+  // puis traverse l'écran pour aller se placer en présentateur
+  let zooming = false;
+  function zoomIntoQuiz(q, card) {
+    if (zooming) return;
+    if (FX.reduceMotion() || !card || !card.animate) return openQuiz(q.id);
+    zooming = true;
+    const r = card.getBoundingClientRect();
+    const radius = getComputedStyle(card).borderRadius;
+    const cover = el("div", { class: "zoom-cover", "aria-hidden": "true" });
+    Object.assign(cover.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", borderRadius: radius });
+    document.body.append(cover);
+    const head = card.querySelector(".card-head");
+    let flyer = null, hr = null;
+    if (head) {
+      hr = head.getBoundingClientRect();
+      flyer = head.cloneNode(true);
+      flyer.className = "zoom-head";
+      Object.assign(flyer.style, { left: hr.left + "px", top: hr.top + "px", width: hr.width + "px", height: hr.height + "px" });
+      document.body.append(flyer);
+      head.style.visibility = "hidden";
+    }
+    FX.sound.whoosh();
+    const ease = "cubic-bezier(.6, 0, .2, 1)";
+    const grow = cover.animate([
+      { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", borderRadius: radius },
+      { left: "0px", top: "0px", width: innerWidth + "px", height: innerHeight + "px", borderRadius: "0px" },
+    ], { duration: 450, easing: ease, fill: "forwards" });
+    // La tête s'envole au centre de l'écran en tournant
+    let lift = null;
+    if (flyer) {
+      const cx = innerWidth / 2 - (hr.left + hr.width / 2), cy = innerHeight * 0.4 - (hr.top + hr.height / 2);
+      lift = `translate(${cx}px, ${cy}px) scale(2.2) rotate(360deg)`;
+      flyer.animate([{ transform: "none" }, { transform: lift }], { duration: 450, easing: "cubic-bezier(.3, .9, .3, 1.15)", fill: "forwards" });
+    }
+    grow.finished.then(() => {
+      openQuiz(q.id);
+      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 380, easing: "ease-out", fill: "forwards" }).finished.then(() => cover.remove());
+      const target = view.querySelector(".q-head .host .head");
+      if (!flyer) { zooming = false; return; }
+      if (!target) { flyer.remove(); zooming = false; return; }
+      // Pendant le vol, la vraie tête reste cachée (même si la page se redessine entre-temps)
+      document.body.classList.add("zoom-flying");
+      FX.sound.boing();
+      const t = target.getBoundingClientRect();
+      const s = t.width / hr.width;
+      const dx = t.left + t.width / 2 - (hr.left + hr.width / 2), dy = t.top + t.height / 2 - (hr.top + hr.height / 2);
+      const mx = (dx + innerWidth / 2 - (hr.left + hr.width / 2)) / 2;
+      flyer.animate([
+        { transform: lift },
+        { transform: `translate(${mx}px, ${Math.min(dy, innerHeight * 0.4 - (hr.top + hr.height / 2)) - 90}px) scale(${(2.2 + s) / 2}) rotate(540deg)`, offset: 0.5 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${s}) rotate(720deg)` },
+      ], { duration: 650, easing: "cubic-bezier(.45, 0, .25, 1)", fill: "forwards" }).finished.then(() => {
+        document.body.classList.remove("zoom-flying");
+        flyer.remove();
+        zooming = false;
+        const host = view.querySelector(".q-head .host");
+        if (host) { host.classList.remove("host-hello"); void host.offsetWidth; host.classList.add("host-hello"); }
+      });
+    }, () => { cover.remove(); flyer?.remove(); zooming = false; openQuiz(q.id); });
   }
 
   // Les deux têtes qui arrivent des côtés, se cognent, puis flottent. Un clic les fait parler.
@@ -342,7 +405,7 @@
     at(600, () => FX.sound.pop());
     SPLASH_WORDS.forEach((_, i) => at(700 + i * 280, () => FX.sound.tick()));
     if (pair.length) at(2350, () => { FX.sound.boing(); overlay.classList.add("bumped"); });
-    runners.forEach((_, i) => at(1500 + i * 450, () => FX.sound.meow((CATS.pets[i] && CATS.pets[i].pitch) || 1)));
+    runners.forEach((_, i) => at(2300 + i * 450, () => FX.sound.meow((CATS.pets[i] && CATS.pets[i].pitch) || 1)));
 
     let leaving = false;
     const leave = () => {
@@ -374,10 +437,11 @@
         document.body.classList.add("splash-landed");
         overlay.remove();
         CATS.start();
+        DIABLOTINS.start();
         setTimeout(() => document.body.classList.remove("splash-landed"), 1200);
       });
     };
-    at(3700, leave);
+    at(4300, leave);
     overlay.addEventListener("pointerdown", leave);
     window.addEventListener("keydown", function onKey() { window.removeEventListener("keydown", onKey); leave(); });
     return true;
